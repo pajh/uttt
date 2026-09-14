@@ -1,0 +1,14 @@
+#!/bin/bash
+echo "#define CG_GAME"
+while IFS= read -r line
+do
+    if [[ "$line" == *"board.h"* ]]
+    then
+        cat ./board.h
+    elif [[ "$line" == *"hashmap.h"* ]]
+    then
+	cat ./hashmap.h
+    else
+	echo "$line"
+    fi
+done < ./ai_minimax.c
