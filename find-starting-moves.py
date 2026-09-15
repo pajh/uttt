@@ -120,8 +120,8 @@ def main():
         writer = csv.DictWriter(handle, fieldnames=list(orbit_rows[0]))
         writer.writeheader()
         writer.writerows(orbit_rows)
-    if any(row["exit_status"] or row["technical_failures"] or row["games"] != args.games for row in rows):
-        raise SystemExit("One or more openings failed; inspect summary.csv and the per-opening logs")
+    if any(row["exit_status"] or row["games"] != args.games for row in rows):
+        raise SystemExit("One or more openings was incomplete; inspect summary.csv and the per-opening logs")
     best = max(rows, key=lambda item: item["match_score"])
     print(f"Best observed opening: row {best['row']} col {best['col']} "
           f"(grid {best['grid']}, cell {best['cell']}), score {best['match_score']:.3f}")

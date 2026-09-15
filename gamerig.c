@@ -615,7 +615,9 @@ int main(int argc,char* argv[])
     printf("p0 starting: %d/%d/%d; p1 starting: %d/%d/%d (p0 wins / p1 wins / draws)\n",started_scores[0][0],started_scores[0][1],started_scores[0][2],started_scores[1][0],started_scores[1][1],started_scores[1][2]);
     if (games_csv) fclose(games_csv);
     if (moves_csv) fclose(moves_csv);
-    return (failures[0] || failures[1]) ? 2 : 0;
+    /* A bot timeout, crash or invalid move is a completed game result: retain
+       the forfeit in the CSV and let long experiment batches continue. */
+    return 0;
 }
 
 void error(char *s)

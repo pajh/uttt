@@ -244,3 +244,13 @@ Protocol robustness: two pre-experiment invalid batches caught long hello trunca
 ## Locked exact thresholds
 
 Selected default exact thresholds primary17/narrow19: exact at <=17 playable cells, plus at 18 cells when fewer than 10 legal moves. Runtime overrides remain for experiments. Rebuilt normal/search bot and merged submission; merged syntax check passed. Selected for current working version despite primary17/narrow20 having the highest single observed threshold-sweep score, following user's preference for the combined tighter setting.
+
+## Relative-score experiment preparation
+
+Added runtime `--score-mode=difference|ratio`; the default remains the historical strength difference. Ratio mode compares non-terminal leaf scores as `10000*(mine-theirs)/(mine+theirs+2)`, equivalent to adding one to both nonnegative strengths before normalising. Proven wins and losses remain explicit `+/-60000` values and therefore cannot be confused with a positional ratio; draws remain zero. Both recursive choice and root choice use the selected comparison. Bot hello and append log identify the active mode.
+
+Added a GitHub Actions comparison with 200 alternating-start games per mode by default. Difference and ratio use identical four-worker seed schedules and separate runners/artifacts. USCALE5, count scale zero and exact thresholds 17/19 are pinned in the command and verified through bot hello metadata.
+
+Bot timeouts, invalid replies and process exits during an individual game are now recorded as forfeits without making a completed rig batch return failure. Opening experiment wrappers likewise fail only for an incomplete subprocess or missing games; technical failures remain counted in their CSV summaries. Identity mismatch remains a hard experiment failure. Verified with a deliberately dead bot: one recorded `invalid_or_eof` forfeit, complete CSV, process exit zero.
+
+Validation: rebuilt gamerig, orig and current bot; exercised difference and ratio modes over two alternating-start games each with distinct verified hello metadata and no technical failures. Existing board test executable completed successfully. Full comparison pending GitHub dispatch.

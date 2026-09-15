@@ -8,6 +8,7 @@
 #define MAX_TIME 0.0900
 #define TERMINAL_SCORE 60000
 #define TIMEOUT_SCORE 65535
+#define RELATIVE_SCORE_SCALE 10000
 //#define MAX_TIME 0.50
 
 #include <stdlib.h>
@@ -232,6 +233,8 @@ typedef struct Score_s {
 #endif
 static double count_scale = DEFAULT_COUNT_SCALE;
 static unsigned long evaluation_calls, count_differential_calls;
+enum ScoreMode { ScoreDifference, ScoreRatio };
+static enum ScoreMode score_mode = ScoreDifference;
 #ifndef USCALE
 #define USCALE 10
 #endif
@@ -241,6 +244,21 @@ static int exact_narrow_spaces = 19;
 #define COUNT_UNIT 20
 static u16 f1_cache[POSS_BOARDS][2];
 static const u16 scoring_lines[8] = {7,56,448,73,146,292,273,84};
+
+/* Terminal outcomes keep their absolute ordering.  Positional strengths may
+   instead be compared as a bounded relative advantage; adding one to each
+   side prevents an empty 0/0 evaluation from creating a zero denominator. */
+static int scoreForPlayer(Score score, int player) {
+    if (score.p0 == TERMINAL_SCORE && score.p1 == 0)
+        return player == 0 ? TERMINAL_SCORE : -TERMINAL_SCORE;
+    if (score.p1 == TERMINAL_SCORE && score.p0 == 0)
+        return player == 1 ? TERMINAL_SCORE : -TERMINAL_SCORE;
+    int mine = player == 0 ? score.p0 : score.p1;
+    int theirs = player == 0 ? score.p1 : score.p0;
+    if (score_mode == ScoreRatio)
+        return RELATIVE_SCORE_SCALE * (mine - theirs) / (mine + theirs + 2);
+    return mine - theirs;
+}
 
 /* Grid potential: distinct winning cells plus unblocked one-mark lines.
    closed includes unavailable squares (especially drawn squares on U). */
@@ -323,7 +341,7 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
         while (moveNextCB(&moves,&next_cell,&next_bit)) {
             Score score = evaluateShallow(board,1-player,next_cell,next_bit,depth-1,timed);
             if (score.p0 == TIMEOUT_SCORE) return score;
-            int value = player == 1 ? (int)score.p0-score.p1 : (int)score.p1-score.p0;
+            int value = scoreForPlayer(score,1-player);
             if (value > best_score) { best_score = value; best = score; }
             if (best_score == TERMINAL_SCORE) break;
         }
@@ -365,7 +383,7 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
                 losing[i] = 1;
                 continue;
             }
-            int value = (int)score.p0-score.p1;
+            int value = scoreForPlayer(score,0);
             iteration[i] = value;
             if (value > best) { best = value; tied.count = 0; }
             if (value == best) push(&tied,candidates.moves[i]);
@@ -454,7 +472,7 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
         "turn pid=%ld seed=%s spaces=%d legal=%u task=%s "
         "exact_attempted=%d exact_failed=%d trigger=%s completed_plies=%d "
         "nodes=%llu elapsed_us=%llu move=%d,%d evals=%lu "
-        "count_diff_evals=%lu uscale=%d count_scale=%.6g\n",
+        "count_diff_evals=%lu uscale=%d count_scale=%.6g score_mode=%s\n",
         (long)getpid(),
         getenv("CG_SEED") ? getenv("CG_SEED") : "",
         spaces_left,
@@ -471,7 +489,8 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
         evaluation_calls,
         count_differential_calls,
         uscale,
-        count_scale
+        count_scale,
+        score_mode == ScoreRatio ? "ratio" : "difference"
     );
 
     set9(board, my_move.x, my_move.y, 0);
@@ -526,6 +545,13 @@ int main(int argc,char* argv[])
                 count_scale=parsed;
                 continue;
             }
+            if (strncmp(arg_str,"--score-mode=",13)==0) {
+                const char *value=arg_str+13;
+                if(strcmp(value,"difference")==0) score_mode=ScoreDifference;
+                else if(strcmp(value,"ratio")==0) score_mode=ScoreRatio;
+                else error("Invalid score mode (expected difference or ratio): %s\n",arg_str);
+                continue;
+            }
             error("Unknown bot argument: %s\n",arg_str);
         }
 
@@ -538,9 +564,9 @@ int main(int argc,char* argv[])
 #ifndef BOT_BUILD_ID
 #define BOT_BUILD_ID "unversioned"
 #endif
-    appendLog("start pid=%ld seed=%u build=%s opening=minimax-from-start exact_primary=%d exact_narrow=%d uscale=%d count_scale=%.6g\n",(long)getpid(),seed,BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,uscale,count_scale);
+    appendLog("start pid=%ld seed=%u build=%s opening=minimax-from-start exact_primary=%d exact_narrow=%d uscale=%d count_scale=%.6g score_mode=%s\n",(long)getpid(),seed,BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,uscale,count_scale,score_mode==ScoreRatio?"ratio":"difference");
     if (getenv("CG_LOCAL_HELLO")) {
-        printf("@BOT\tminimax-%s\topening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,uscale,count_scale,(int)(20*count_scale+0.5));
+        printf("@BOT\tminimax-%s\topening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; score-mode=%s; relative-scale=%d; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,score_mode==ScoreRatio?"ratio":"difference",RELATIVE_SCORE_SCALE,uscale,count_scale,(int)(20*count_scale+0.5));
         fflush(stdout);
     }
     int turn = 0;

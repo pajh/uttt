@@ -1,0 +1,51 @@
+name: Ratio score comparison
+run-name: Difference vs ratio — ${{ inputs.games_per_mode }} games each, alternating starts
+
+on:
+  workflow_dispatch:
+    inputs:
+      games_per_mode:
+        description: Total games for each score mode; must be divisible by four
+        required: true
+        default: "200"
+      base_seed:
+        description: Identical seed schedule for both score modes
+        required: true
+        default: "20261001"
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [difference, ratio]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build identified bots and rig
+        run: make bin/gamerig bin/orig bin/ai_search_start
+
+      - name: Run four alternating-start workers
+        env:
+          GAMES_PER_MODE: ${{ inputs.games_per_mode }}
+          BASE_SEED: ${{ inputs.base_seed }}
+          SCORE_MODE: ${{ matrix.mode }}
+        run: |
+          test $((GAMES_PER_MODE % 4)) -eq 0
+          games_per_worker=$((GAMES_PER_MODE / 4))
+          command="./bin/gamerig -G${games_per_worker} --p0 './bin/ai_search_start --uscale=5 --count-scale=0 --exact-primary=17 --exact-narrow=19 --score-mode=${SCORE_MODE}' --p1 ./bin/orig --quiet-bots"
+          ./multi-rig.sh "$command" "$BASE_SEED" "score-${SCORE_MODE}"
+
+      - name: Show summary
+        if: always()
+        run: cat "score-${{ matrix.mode }}/summary.csv" || true
+
+      - name: Upload result tables and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: score-${{ matrix.mode }}-${{ github.run_id }}
+          path: score-${{ matrix.mode }}/
+          retention-days: 30

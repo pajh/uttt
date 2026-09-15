@@ -91,8 +91,8 @@ def main():
     if not identities[0] or any(identity != identities[0] for identity in identities[1:]):
         raise SystemExit("Bot identity/hello mismatch across opening classes")
     (output / "metadata.tsv").write_text(identities[0])
-    if any(row["exit_status"] or row["technical_failures"] or row["games"] != args.games for row in summaries):
-        raise SystemExit("One or more classes failed; inspect summary.csv and logs")
+    if any(row["exit_status"] or row["games"] != args.games for row in summaries):
+        raise SystemExit("One or more classes was incomplete; inspect summary.csv and logs")
     best = max(summaries, key=lambda row: row["match_score"])
     print(f"Best observed class: {best['class']} score={best['match_score']:.3f}")
     print(f"Summary: {output / 'summary.csv'}")

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Run one rig command with four seed ranges. Usage: ./multi-rig.sh [command] [base-seed]
+# Run one rig command with four seed ranges.
+# Usage: ./multi-rig.sh [command] [base-seed] [output-directory]
 set -u
 command=${1:-'./bin/gamerig -G10 --p0 ./bin/ai_search_start --p1 ./bin/orig --quiet-bots'}
 seed=${2:-20261001}
 [[ $seed =~ ^[0-9]+$ ]] || { echo 'Seed must be a nonnegative integer' >&2; exit 1; }
-output="run-$(date +%Y%m%d-%H%M%S)-$$"
+output=${3:-"run-$(date +%Y%m%d-%H%M%S)-$$"}
 mkdir "$output" || exit 1
 printf '%s\n' "$command" > "$output/command.txt"
 pids=(); failed=0
