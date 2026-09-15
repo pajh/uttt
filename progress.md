@@ -1,5 +1,29 @@
 # Bot experiments
 
+## 15 September 2026 morning summary
+
+The recovered project is now a usable development system rather than a collection of historical fragments. `orig.c` remains the untouched point-in-time opponent. The current modular bot builds normally and through the `subst` single-file submission path. The process rig speaks the CodinGame stdin/stdout protocol, accepts quoted bot commands with arguments, verifies each bot's build identity and effective settings, distinguishes played wins from technical forfeits, records 3IAR/count finishes and exact-DFS failures, and supports four concurrent batches with compact combined CSV output. Local generated binaries, logs and raw runs are excluded from Git.
+
+The current bot now searches from the opening instead of using the large deterministic opening-rule block. Its evaluator was rebuilt around named `f1`, `f2` and `fc` pieces: local and ultimate-board line strength, the importance of each sub-board to the ultimate board, and gated claimed-board count strength. Hard terminal handling now propagates proven 3IAR and count wins/losses through both shallow and exact minimax. Completed forced wins survive an interrupted iterative-deepening pass; completed forced losses exclude that root even if a deeper iteration later times out. The speculative cross-depth shallow-cache retention change was reverted because remaining depth is part of the cache key and the observed result did not demonstrate useful reuse.
+
+Heat-map tooling can replay our turns from a recorded game as successive 9x9 boards. Every legal root move is searched to the same selected minimax depth, coloured by score and annotated with immediate `f1`/`f2`/count components. This exposed and fixed a legal-bitmask display bug, clarified occasions where the timed bot chose a move below the fixed-depth maximum, and gave a practical way to inspect synthetic positions without trying to infer evaluator quality solely from noisy match totals.
+
+Exact-search entry thresholds were measured independently. We selected and locked primary 17 / narrow 19: exact search at 17 or fewer playable cells, plus the narrow case at 18 cells with fewer than 10 legal moves. USCALE 5 and count scale 0 are the pinned settings for the current opening experiment. These are working experimental choices rather than settled optimal values.
+
+The repository is public at https://github.com/pajh/uttt. A GitHub Actions smoke run proved the hosted build, four-way execution, summaries and artifact upload. The active full run compares 100 games each for `BASE MM MD MC DM DD DC CM CD CC`, with our bot always player 0 and always starting. `M` means middle, `D` diagonal/corner and `C` cardinal/edge. Each forced policy independently samples an eligible outer grid and inner cell on every game; `BASE` lets minimax choose normally. Every exact opening and both bot identities/settings are recorded. The local smoke confirmed that normal minimax selected grid 4/cell 4 (`MM`).
+
+### Longer GitHub experiment: force the opponent's first reply
+
+Extend the randomized opening classes to controlled two-ply positions. For a second-letter diagonal, classify the opponent's diagonal reply as `S` (same cell, sending us back to our starting grid), `O` (opposite corner, forming a line through the middle), or `A` (one of the two adjacent corners). Cardinal destinations have the same `S`/`O`/`A` relationships; middle has only `S`. This produces seven reply geometries per initial outer-grid class and 21 forced two-ply policies: `MMS`, `MDS/MDO/MDA`, `MCS/MCO/MCA`, and the equivalent seven under initial `D` and `C`.
+
+Include a normal-response control for every first-move class as well as the completely normal `BASE`. A forced reply tells us whether the resulting position is good; its normal-response control tells us whether `orig` is inclined to enter it. Record our exact opening, the opponent's exact reply, its relationship, the board sent back to us, result and win type. At 100 games per policy this is a suitable longer hosted computation after the current one has been reviewed.
+
+### TODO
+
+- Check GitHub Actions run #3 (`https://github.com/pajh/uttt/actions/runs/34945301762`), download its artifact, review `summary.csv` and `openings.csv`, and record the result here before changing another lever.
+- Explain how this repository's GitHub-hosted compute works: workflow triggers and branches, runner allocation and concurrency, time and storage limits, logs/artifacts, rerunning with manual inputs, billing for a public repository, and how to stop or avoid accidental expensive runs.
+- Design the opponent-reply forcing so both bots consume the imposed moves through the ordinary protocol and retain valid internal state; use a small hosted smoke run before starting the 21-policy job.
+
 ## Starting-move finder
 
 Added a rig-level `--force-opening row,col` option. It fixes player 0 as the starter and presents exactly that one legal move on ply zero, so the tested bot consumes the forced move through its normal CodinGame protocol and retains its normal internal state. `find-starting-moves.py` tests all 81 openings with the same seed schedule and four concurrent games, verifies that bot identity/settings are identical across every opening, and emits both coordinate-level results and the 15 simultaneous outer/inner D4 symmetry classes. The manual GitHub Actions workflow defaults to 25 games per opening (2,025 total) with USCALE 5, count scale 0 and exact-search thresholds 17/19.
