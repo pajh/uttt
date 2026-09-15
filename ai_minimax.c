@@ -19,17 +19,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <stdarg.h>
-#include <fcntl.h>
 #include <search.h>
 
 #include "board.h"
 
-enum Task {Shallow, Minimax, None};
-enum Task current_task = None;
-
 uint64_t start_time;
-double   mm_step_target_time;
-double   mm_step_start_time;
 double move_budget = MAX_TIME;
 double search_deadline;
 uint64_t search_nodes;
@@ -61,20 +55,6 @@ void error(const char *format, ...)
     fprintf(stderr, "TERMINATING\n");
 
     exit(-1);
-}
-
-static void appendLog(const char *format, ...) {
-#ifndef CG_GAME
-    char line[2048];
-    va_list args; va_start(args,format);
-    int n=vsnprintf(line,sizeof line,format,args); va_end(args);
-    if(n<0) return;
-    if(n>=(int)sizeof line) n=sizeof(line)-1;
-    int fd=open("ai_minimax.log",O_WRONLY|O_CREAT|O_APPEND,0644);
-    if(fd>=0) { (void)write(fd,line,(size_t)n); close(fd); }
-#else
-    (void)format;
-#endif
 }
 
 int calcPlayable(Board9* board) {
@@ -350,8 +330,6 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
     return best;
 }
 
-int last_completed_plies;
-
 enum RootProof {
     RootUnproved,
     RootForcedWin,
@@ -360,84 +338,42 @@ enum RootProof {
 
 typedef struct RootMove_s {
     Pos move;
-    int score;              /* Latest fully evaluated score for this move. */
-    int evaluated_plies;    /* Ply depth that produced score. */
-    int stable_score;       /* Score at the last depth completed by all moves. */
+    int score;
+    int evaluated_plies;
     enum RootProof proof;
 } RootMove;
 
-static int sameMove(Pos a, Pos b) {
-    return a.x == b.x && a.y == b.y;
-}
-
-/* Choose using the last score depth completed by every unresolved root.
-   A loss proved during a later partial iteration is still excluded. */
-static Pos chooseBestStableMove(
-    RootMove root_moves[81], int root_count, Pos previous_choice,
-    int preserve_previous_choice
-) {
-    const int worse_than_any_score = -1000000;
-    int best_score = worse_than_any_score;
-    Moves best_moves = {0};
-
-    for (int i=0;i<root_count;i++) {
-        if (root_moves[i].proof == RootForcedLoss) continue;
-        if (root_moves[i].stable_score > best_score) {
-            best_score = root_moves[i].stable_score;
-            best_moves.count = 0;
-        }
-        if (root_moves[i].stable_score == best_score)
-            push(&best_moves,root_moves[i].move);
-    }
-
-    /* If every move is a proved loss, there is no better legal alternative. */
-    if (!best_moves.count) return previous_choice;
-
-    /* The final post-timeout pass preserves an existing tied choice.  A newly
-       completed iteration deliberately makes its normal random tie choice. */
-    if (preserve_previous_choice)
-        for (int i=0;i<best_moves.count;i++)
-            if (sameMove(best_moves.moves[i],previous_choice)) return previous_choice;
-
-    return best_moves.moves[rand() % best_moves.count];
-}
+typedef struct RootMoves_s {
+    RootMove moves[81];
+    int count;
+} RootMoves;
 
 Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
-    /* This is the list from which one move must ultimately be selected.  Each
-       entry keeps its own search depth, score and permanent proof state. */
-    RootMove root_moves[81] = {0};
-    int root_count = 0;
+    RootMoves roots = {0};
     resetMoveIt(valid_moves);
     Pos move;
     while (moveNext(valid_moves,&move)) {
-        root_moves[root_count].move = move;
-        root_moves[root_count].proof = RootUnproved;
-        root_count++;
+        roots.moves[roots.count].move = move;
+        roots.moves[roots.count].proof = RootUnproved;
+        roots.count++;
     }
 
-    last_completed_plies = 0;
-
-    /* Always have a legal answer, even if the clock expires before the first
-       complete iteration. */
-    Pos chosen = root_moves[rand() % root_count].move;
-
-    /* Search complete pairs of moves: ours, then the opponent's reply. */
+    /* Re-evaluate every non-losing move two plies deeper.  A completed root
+       overwrites its previous score immediately, so an interrupted iteration
+       leaves a deliberate mixture of depths for the ratio score to compare. */
     const int maximum_target_plies = 6;
+    int time_expired = 0;
     for (int target_plies=2;
-         target_plies<=maximum_target_plies;
+         target_plies<=maximum_target_plies && !time_expired;
          target_plies+=2) {
         clearHM(map);
-        int iteration_complete = 1;
 
-        for (int i=0;i<root_count;i++) {
-            RootMove *root = &root_moves[i];
+        for (int i=0;i<roots.count;i++) {
+            RootMove *root = &roots.moves[i];
 
-            /* Once the opponent has a forced win after this move, searching
-               two more plies cannot make that already available win vanish. */
             if (root->proof == RootForcedLoss) continue;
-
             if (getElaspedTime() >= search_deadline) {
-                iteration_complete = 0;
+                time_expired = 1;
                 break;
             }
 
@@ -447,22 +383,17 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
                 *board,0,cell,bit,target_plies-1,1
             );
             if (score.p0 == TIMEOUT_SCORE) {
-                iteration_complete = 0;
+                time_expired = 1;
                 break;
             }
 
-            /* This root was fully minimaxed to a forced win.  No result from
-               another root can be better, so it is immediately actionable. */
             if (score.p0 == TERMINAL_SCORE && score.p1 == 0) {
                 root->proof = RootForcedWin;
                 root->score = TERMINAL_SCORE;
                 root->evaluated_plies = target_plies;
-                last_completed_plies = target_plies;
                 return root->move;
             }
 
-            /* Retain a completed forced-loss proof across later iterations.
-               We may still return such a move if every legal move loses. */
             if (score.p1 == TERMINAL_SCORE && score.p0 == 0) {
                 root->proof = RootForcedLoss;
                 root->score = -TERMINAL_SCORE;
@@ -473,28 +404,19 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
             root->score = scoreForPlayer(score,0);
             root->evaluated_plies = target_plies;
         }
-
-        /* Latest per-move scores remain recorded, but this version does not
-           mix their depths.  Only permanent win/loss proofs from an aborted
-           iteration affect the move selected from the stable scores. */
-        if (!iteration_complete) break;
-
-        last_completed_plies = target_plies;
-        int unresolved_after_iteration = 0;
-        for (int i=0;i<root_count;i++) {
-            if (root_moves[i].proof == RootUnproved) {
-                root_moves[i].stable_score = root_moves[i].score;
-                unresolved_after_iteration++;
-            }
-        }
-
-        /* Every root searched at this depth turned out to be a forced loss. */
-        if (!unresolved_after_iteration) break;
-
-        chosen = chooseBestStableMove(root_moves,root_count,chosen,0);
     }
 
-    return chooseBestStableMove(root_moves,root_count,chosen,1);
+    int best_score = -TERMINAL_SCORE-1;
+    Moves best_moves = {0};
+    for (int i=0;i<roots.count;i++) {
+        if (roots.moves[i].score > best_score) {
+            best_score = roots.moves[i].score;
+            best_moves.count = 0;
+        }
+        if (roots.moves[i].score == best_score)
+            push(&best_moves,roots.moves[i].move);
+    }
+    return best_moves.moves[rand() % best_moves.count];
 }
 
 static int isLegalMove(int x, int y, Moves2 *moves)
@@ -515,13 +437,10 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     evaluation_calls = 0;
     count_differential_calls = 0;
     search_nodes = 0;
-    last_completed_plies = -1;
 
     spaces_left = calcPlayable(board);
     search_deadline = move_budget;
 
-    int exact_attempted = 0;
-    int exact_failed = 0;
     Pos my_move;
 
     int primary_exact_trigger = spaces_left <= exact_primary_spaces;
@@ -532,52 +451,22 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     int try_exact_search = primary_exact_trigger || narrow_exact_trigger;
 
     if (try_exact_search) {
-        current_task = Minimax;
-        exact_attempted = 1;
-
         double elapsed = getElaspedTime();
         search_deadline = elapsed + (move_budget - elapsed) * 0.5;
         my_move = evaluateMovesMM(board, valid_moves);
 
         search_deadline = move_budget;
         if (my_move.x == 0xFF) {
-            exact_failed = 1;
             if (getenv("CG_LOCAL_HELLO")) printf("@DFS_FAILED\t%d\t%u\t%s\n",spaces_left,valid_moves->count,primary_exact_trigger?"primary":"narrow");
             my_move = evaluateMovesShallowTimed(board, valid_moves);
         }
     } else {
-        current_task = Shallow;
         my_move = evaluateMovesShallowTimed(board, valid_moves);
     }
 
     if (!isLegalMove(my_move.x, my_move.y, valid_moves)) {
         error("Selected illegal move\n");
     }
-
-    appendLog(
-        "turn pid=%ld seed=%s spaces=%d legal=%u task=%s "
-        "exact_attempted=%d exact_failed=%d trigger=%s completed_plies=%d "
-        "nodes=%llu elapsed_us=%llu move=%d,%d evals=%lu "
-        "count_diff_evals=%lu uscale=%d count_scale=%.6g score_mode=%s\n",
-        (long)getpid(),
-        getenv("CG_SEED") ? getenv("CG_SEED") : "",
-        spaces_left,
-        valid_moves->count,
-        current_task == Minimax ? "exact" : "shallow",
-        exact_attempted,
-        exact_failed,
-        exact_attempted ? (primary_exact_trigger ? "primary" : "narrow") : "none",
-        last_completed_plies,
-        (unsigned long long)search_nodes,
-        (unsigned long long)(getElaspedTime() * 1000000),
-        my_move.y,
-        my_move.x,
-        evaluation_calls,
-        count_differential_calls,
-        uscale,
-        count_scale,
-        score_mode == ScoreRatio ? "ratio" : "difference"
-    );
 
     set9(board, my_move.x, my_move.y, 0);
     return my_move;
@@ -650,9 +539,9 @@ int main(int argc,char* argv[])
 #ifndef BOT_BUILD_ID
 #define BOT_BUILD_ID "unversioned"
 #endif
-    appendLog("start pid=%ld seed=%u build=%s opening=minimax-from-start exact_primary=%d exact_narrow=%d uscale=%d count_scale=%.6g score_mode=%s\n",(long)getpid(),seed,BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,uscale,count_scale,score_mode==ScoreRatio?"ratio":"difference");
     if (getenv("CG_LOCAL_HELLO")) {
-        printf("@BOT\tminimax-%s\topening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; score-mode=%s; relative-scale=%d; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,score_mode==ScoreRatio?"ratio":"difference",RELATIVE_SCORE_SCALE,uscale,count_scale,(int)(20*count_scale+0.5));
+        const char *version = score_mode == ScoreRatio ? "MM-001-RM" : "MM-001-DM";
+        printf("@BOT\t%s\tbuild=%s; opening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; score-mode=%s; partial-depth=merge; relative-scale=%d; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",version,BOT_BUILD_ID,exact_primary_spaces,exact_narrow_spaces,score_mode==ScoreRatio?"ratio":"difference",RELATIVE_SCORE_SCALE,uscale,count_scale,(int)(20*count_scale+0.5));
         fflush(stdout);
     }
     int turn = 0;
