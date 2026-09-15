@@ -38,5 +38,8 @@ bin/ai_uniform_opening: ai_minimax.c board.h hashmap.h | bin
 bin/ai_search_start: ai_minimax.c board.h hashmap.h | bin
 	$(CC) $(CFLAGS) $(LOCAL_ARCH) -DBOT_BUILD_ID=\"$$(sha256sum ai_minimax.c board.h hashmap.h | sha256sum | cut -c1-16)\" -DOPENING_SEARCH_THRESHOLD=82 ai_minimax.c -o $@
 
+bin/ai_search_debug: ai_minimax.c board.h hashmap.h | bin
+	$(CC) $(CFLAGS) $(LOCAL_ARCH) -DDEBUG -DBOT_BUILD_ID=\"$$(sha256sum ai_minimax.c board.h hashmap.h | sha256sum | cut -c1-16)\" -DOPENING_SEARCH_THRESHOLD=82 ai_minimax.c -o $@
+
 bin/heatdump: heatdump.c ai_minimax.c board.h hashmap.h | bin
 	$(CC) $(CFLAGS) $(LOCAL_ARCH) heatdump.c -o $@
