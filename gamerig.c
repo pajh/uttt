@@ -28,7 +28,7 @@ unsigned rig_seed = 20260914;
 unsigned game_seed;
 Pos forced_opening = {-1, -1};
 int fixed_starting_player = -1;
-char opening_class[3] = "";
+char opening_class[4] = "";
 FILE *games_csv, *moves_csv;
 int timed_out;
 int dfs_failed[2], dfs_failed_primary[2], dfs_failed_narrow[2];
@@ -37,7 +37,7 @@ uint64_t response_count[2], response_total[2], max_first[2], max_later[2];
 
 int failures[2];
 
-static int chooseOpeningIndex(char category) {
+static int chooseOpeningIndex(char category, unsigned random_value) {
     static const int middle[] = {4};
     static const int diagonal[] = {0, 2, 6, 8};
     static const int cardinal[] = {1, 3, 5, 7};
@@ -46,7 +46,23 @@ static int chooseOpeningIndex(char category) {
     if (category == 'M') { choices = middle; count = 1; }
     else if (category == 'D') { choices = diagonal; count = 4; }
     else { choices = cardinal; count = 4; }
-    return choices[rand() % count];
+    return choices[random_value % count];
+}
+
+static int chooseRelatedOpeningIndex(int grid, char cell_category, char relation, unsigned random_value) {
+    if (!relation) return chooseOpeningIndex(cell_category, random_value);
+    if (relation == 'S') return grid;
+    if (relation == 'O') return 8-grid;
+    int gr=grid/3, gc=grid%3, choices[4], count=0;
+    for (int cell=0;cell<9;cell++) {
+        if (cell==4 || (cell_category=='D') != (cell==0 || cell==2 || cell==6 || cell==8)) continue;
+        int distance=abs(gr-cell/3)+abs(gc-cell%3);
+        if ((relation=='A' && cell!=grid && cell!=8-grid) ||
+            (relation=='N' && distance==1) || (relation=='F' && distance==3))
+            choices[count++]=cell;
+    }
+    if (!count) error("opening relation");
+    return choices[random_value % count];
 }
 
 
@@ -207,8 +223,9 @@ int playGame(int game, int player, char* p0_arg)
     Pos game_opening = forced_opening;
     int opening_grid = -1, opening_cell = -1;
     if (*opening_class) {
-        opening_grid = chooseOpeningIndex(opening_class[0]);
-        opening_cell = chooseOpeningIndex(opening_class[1]);
+        unsigned grid_random=(unsigned)rand(), cell_random=(unsigned)rand();
+        opening_grid = chooseOpeningIndex(opening_class[0],grid_random);
+        opening_cell = chooseRelatedOpeningIndex(opening_grid,opening_class[1],opening_class[2],cell_random);
         game_opening.x = (opening_grid % 3) * 3 + opening_cell % 3;
         game_opening.y = (opening_grid / 3) * 3 + opening_cell / 3;
     } else if (fixed_starting_player == 0 && game_opening.x < 0) {
@@ -541,11 +558,16 @@ int main(int argc,char* argv[])
         }
         else if (strcmp(argv[i], "--opening-class") == 0 && i+1<argc) {
             const char *value = argv[++i];
-            if (strlen(value) != 2 || !strchr("MDC", value[0]) || !strchr("MDC", value[1])) {
-                fputs("--opening-class requires two letters chosen from M, D and C\n", stderr);
+            size_t length=strlen(value);
+            int valid = (length==2 && strchr("MDC",value[0]) && strchr("MDC",value[1])) ||
+                (length==3 && strchr("DC",value[0]) && strchr("DC",value[1]) &&
+                 ((value[0]==value[1] && strchr("SOA",value[2])) ||
+                  (value[0]!=value[1] && strchr("NF",value[2]))));
+            if (!valid) {
+                fputs("--opening-class requires MM-style classes, DDS/DDO/DDA or DCN/DCF-style classes\n", stderr);
                 return 1;
             }
-            opening_class[0] = value[0]; opening_class[1] = value[1]; opening_class[2] = 0;
+            strcpy(opening_class,value);
             fixed_starting_player = 0;
         }
         else if (strcmp(argv[i], "--p0-first") == 0) fixed_starting_player = 0;

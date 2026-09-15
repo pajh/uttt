@@ -44,12 +44,23 @@ This writes one `run-*` directory directly below the repository. `summary.csv` c
 
 ## Starting-move experiments
 
-Compare the normal opener with the nine middle/diagonal/cardinal policies:
+Compare the normal opener with the 15 empty-board symmetry policies:
 
 ```sh
-python3 find-starting-classes.py --games 100 --jobs 4 --seed 20261001
+python3 find-starting-classes.py --games 200 --jobs 4 --seed 20261001
 ```
 
-`M` means middle, `D` diagonal/corner, and `C` cardinal/edge. For every game in (for example) `DC`, the rig randomly chooses a diagonal outer grid and then a cardinal cell within it. Player 0 is always our bot and always starts. `BASE` supplies the normal 81 legal moves and lets the bot choose. Every policy reuses the same seed schedule, and every game row records the exact opening row, column, grid and cell sampled or chosen.
+`M` means middle, `D` diagonal/corner, and `C` cardinal/edge. `S`, `O` and `A` split same-category pairs into same, opposite and adjacent; `N` and `F` split mixed diagonal/cardinal pairs into near and far. For example, `DDS` selects the same inner diagonal as the outer grid and therefore sends the opponent back to our starting grid. Player 0 is always our bot and always starts. `BASE` supplies the normal 81 legal moves and lets the bot choose. Every policy reuses the same seed schedule, and every game row records the exact opening row, column, grid and cell sampled or chosen.
 
-The **Starting move class finder** GitHub Actions workflow runs 100 games for each of `BASE MM MD MC DM DD DC CM CD CC`: 1,000 games total with four concurrent policies. It uploads the policy summary, exact-opening sample frequencies, raw game tables, verified bot identities and logs as one artifact. `find-starting-moves.py` remains available for a later exhaustive 81-coordinate experiment.
+The **Starting move class finder** GitHub Actions workflow defaults to 200 games for each of `BASE MM MD MC DM DDS DDO DDA DCN DCF CM CDN CDF CCS CCO CCA`: 3,200 games total with four concurrent policies. It uploads the policy summary, exact-opening sample frequencies, raw game tables, verified bot identities and logs as one artifact. `find-starting-moves.py` remains available for a later exhaustive 81-coordinate experiment.
+
+Use the small `gh` wrapper to submit and retrieve hosted work without navigating the Actions UI:
+
+```sh
+./github-experiment.sh launch 200 20261001
+./github-experiment.sh list
+./github-experiment.sh watch RUN_ID
+./github-experiment.sh fetch RUN_ID
+```
+
+The workflow is manual-only, so ordinary pushes cannot start expensive jobs accidentally. `fetch` stores the artifact directly under `published-results/run-RUN_ID/` and prints its summary.

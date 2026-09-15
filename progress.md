@@ -30,6 +30,10 @@ Added a rig-level `--force-opening row,col` option. It fixes player 0 as the sta
 
 Revised the first hosted experiment to compare nine randomized category policies plus a normal baseline. `M` is centre, `D` diagonal/corner and `C` cardinal/edge. Each of `MM MD MC DM DD DC CM CD CC` randomly samples an eligible outer grid and eligible inner cell independently for every game; `BASE` lets the bot choose normally. Our bot is always player 0 and starts all 100 games per policy. Exact sampled/chosen coordinates are recorded. Total hosted run size is 1,000 games, with four policies concurrent.
 
+GitHub run 34945301762 completed successfully in 10m37s: 1,000 games, zero technical failures, verified minimax build 18b9bb9cab810b40 versus historical orig build 21d1b83935be6da9. Scores: BASE 86.0%, MM 81.5%, MD 88.0%, MC 90.0%, DM 80.0%, DD 87.0%, DC 81.5%, CM 81.5%, CD 85.5%, CC 87.5%. BASE chose grid4/cell4 in all 100 games, confirming normal minimax opens MM. The 4.5-point BASE/MM difference despite the same resulting first-move board is a direct warning about run noise and/or the perturbation from presenting a single legal move. Extracted artifact is preserved under `published-results/run-34945301762/`.
+
+The nine coarse policies contain 15 true simultaneous D4 symmetry classes. Same-category DD and CC split into same (`S`), opposite (`O`) and adjacent (`A`) outer-grid/inner-cell relationships. Mixed DC and CD split into near (`N`) and far (`F`). Existing sparse aggregation suggested DDA 91.7% versus DDO 76.2%, while CCO 92.9% versus CCA 83.3%, but subgroup sizes were only 21--48 and intervals overlap widely. Next hosted experiment therefore uses BASE plus `MM MD MC DM DDS DDO DDA DCN DCF CM CDN CDF CCS CCO CCA`, 200 games each (3,200 total), with equal sample size per symmetry and four concurrent policies.
+
 ## Control: repaired hybrid bot
 
 Historical opponent: unchanged orig.c. Current hybrid: opening rules while at least 72 playable squares remain, existing timed shallow minimax thereafter, terminal endgame solver. Six evaluator weights: 29,10,4,1,7,3. No alpha-beta or hash-table performance tuning.

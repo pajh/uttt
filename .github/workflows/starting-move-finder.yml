@@ -1,16 +1,13 @@
 name: Starting move class finder
+run-name: Opening symmetries — ${{ inputs.games_per_policy }} games each, seed ${{ inputs.base_seed }}
 
 on:
-  push:
-    branches:
-      - experiment/starting-moves
-      - experiment/starting-moves-smoke
   workflow_dispatch:
     inputs:
       games_per_policy:
-        description: Games for each of nine classes and the normal baseline
+        description: Games for each of 15 symmetries and the normal baseline
         required: true
-        default: "25"
+        default: "200"
       base_seed:
         description: Seed schedule reused for every opening
         required: true
@@ -26,22 +23,15 @@ jobs:
       - name: Build identified bots and rig
         run: make bin/gamerig bin/orig bin/ai_search_start
 
-      - name: Test nine classes and normal baseline on four workers
+      - name: Test 15 symmetries and normal baseline on four workers
         env:
           REQUESTED_GAMES: ${{ inputs.games_per_policy }}
           BASE_SEED: ${{ inputs.base_seed }}
-          RUN_BRANCH: ${{ github.ref_name }}
         run: |
-          games="$REQUESTED_GAMES"
-          seed="$BASE_SEED"
-          if test -z "$games"; then
-            if test "$RUN_BRANCH" = "experiment/starting-moves-smoke"; then games=4; else games=100; fi
-          fi
-          if test -z "$seed"; then seed=20261001; fi
           python3 find-starting-classes.py \
-            --games "$games" \
+            --games "$REQUESTED_GAMES" \
             --jobs 4 \
-            --seed "$seed" \
+            --seed "$BASE_SEED" \
             --output starting-classes
 
       - name: Show results ranked by match score

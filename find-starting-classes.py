@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the nine middle/diagonal/cardinal opening policies."""
+"""Compare the 15 empty-board opening symmetries and normal baseline."""
 import argparse
 import csv
 import json
@@ -7,7 +7,8 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-CLASSES = ("BASE", "MM", "MD", "MC", "DM", "DD", "DC", "CM", "CD", "CC")
+CLASSES = ("BASE", "MM", "MD", "MC", "DM", "DDS", "DDO", "DDA",
+           "DCN", "DCF", "CM", "CDN", "CDF", "CCS", "CCO", "CCA")
 
 
 def run_class(args, output, opening_class):
@@ -43,8 +44,8 @@ def run_class(args, output, opening_class):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-G", "--games", type=int, default=100,
-                        help="games per policy (default: 100; 1,000 total including baseline)")
+    parser.add_argument("-G", "--games", type=int, default=200,
+                        help="games per policy (default: 200; 3,200 total including baseline)")
     parser.add_argument("-j", "--jobs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20261001)
     parser.add_argument("--p0", default="./bin/ai_search_start --uscale=5 --count-scale=0 --exact-primary=17 --exact-narrow=19")
