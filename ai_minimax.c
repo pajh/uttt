@@ -351,64 +351,137 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
 }
 
 int last_completed_plies;
+
+static int sameMove(Pos a, Pos b) {
+    return a.x == b.x && a.y == b.y;
+}
+
+/* Pick from the best scores produced by the last wholly completed iteration.
+   proven_loss may contain extra information discovered in the next, aborted
+   iteration, so a newly proved losing move is never restored here. */
+static Pos chooseBestRetainedMove(
+    Moves *root_moves,
+    int retained_score[81],
+    unsigned char proven_loss[81],
+    Pos previous_choice
+) {
+    const int worse_than_any_score = -1000000;
+    int best_score = worse_than_any_score;
+    Moves best_moves = {0};
+
+    for (int i=0;i<root_moves->count;i++) {
+        if (proven_loss[i]) continue;
+        if (retained_score[i] > best_score) {
+            best_score = retained_score[i];
+            best_moves.count = 0;
+        }
+        if (retained_score[i] == best_score)
+            push(&best_moves,root_moves->moves[i]);
+    }
+
+    /* If every move is a proved loss, there is no better legal alternative. */
+    if (!best_moves.count) return previous_choice;
+
+    /* Preserve the choice already made at the completed depth when possible;
+       this avoids consuming another random number merely to select the same
+       tied set again. */
+    for (int i=0;i<best_moves.count;i++)
+        if (sameMove(best_moves.moves[i],previous_choice)) return previous_choice;
+
+    return best_moves.moves[rand() % best_moves.count];
+}
+
 Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
-    last_completed_plies=0;
-    Moves candidates = {0};
+    /* Materialise the root moves because Moves2 is an iterator over bitmasks,
+       while the arrays below need a stable index for each candidate. */
+    Moves root_moves = {0};
     resetMoveIt(valid_moves);
     Pos move;
-    while (moveNext(valid_moves,&move)) push(&candidates,move);
-    /* Legal fallback exists even if no whole iteration fits the deadline. */
-    Pos chosen = candidates.moves[rand() % candidates.count];
-    int retained[81] = {0};
-    unsigned char losing[81] = {0};
-    for (int depth=1;depth<=5;depth+=2) {
+    while (moveNext(valid_moves,&move)) push(&root_moves,move);
+
+    last_completed_plies = 0;
+
+    /* Always have a legal answer, even if the clock expires before the first
+       complete iteration. */
+    Pos chosen = root_moves.moves[rand() % root_moves.count];
+
+    /* Scores are committed only when every surviving root move completed at
+       the same depth.  Proofs are different: a completely searched root that
+       is a forced loss remains a forced loss even if the iteration later runs
+       out of time on another root. */
+    int retained_score[81] = {0};
+    unsigned char proven_loss[81] = {0};
+
+    /* depth is the number of recursive plies below our root move.  Odd values
+       1,3,5 therefore complete searches of 2,4,6 total plies, always ending
+       after the opponent has replied. */
+    for (int depth_below_root=1;depth_below_root<=5;depth_below_root+=2) {
         clearHM(map);
-        int best = -1000000;
-        Moves tied = {0};
-        int complete = 1, resolved = 1;
-        int iteration[81] = {0};
-        for (int i=0;i<candidates.count;i++) {
-            if (losing[i]) continue;
-            if (getElaspedTime() >= search_deadline) { complete = 0; break; }
-            u16 cell,bit;
-            pos2cell(candidates.moves[i],&cell,&bit);
-            Score score = evaluateShallow(*board,0,cell,bit,depth,1);
-            if (score.p0 == TIMEOUT_SCORE) { complete = 0; break; }
-            /* A completed forced-win proof is valid even if other roots are unsearched. */
-            if (score.p0 == TERMINAL_SCORE && score.p1 == 0) {
-                last_completed_plies=depth+1;
-                return candidates.moves[i];
+        int iteration_complete = 1;
+        int iteration_best_score = -1000000;
+        int iteration_score[81] = {0};
+        Moves iteration_best_moves = {0};
+
+        for (int i=0;i<root_moves.count;i++) {
+            if (proven_loss[i]) continue;
+
+            if (getElaspedTime() >= search_deadline) {
+                iteration_complete = 0;
+                break;
             }
+
+            u16 cell, bit;
+            pos2cell(root_moves.moves[i],&cell,&bit);
+            Score score = evaluateShallow(
+                *board,0,cell,bit,depth_below_root,1
+            );
+            if (score.p0 == TIMEOUT_SCORE) {
+                iteration_complete = 0;
+                break;
+            }
+
+            /* This root was fully minimaxed to a forced win.  No result from
+               another root can be better, so it is immediately actionable. */
+            if (score.p0 == TERMINAL_SCORE && score.p1 == 0) {
+                last_completed_plies = depth_below_root + 1;
+                return root_moves.moves[i];
+            }
+
+            /* Retain a completed forced-loss proof across later iterations.
+               We may still return such a move if every legal move loses. */
             if (score.p1 == TERMINAL_SCORE && score.p0 == 0) {
-                losing[i] = 1;
+                proven_loss[i] = 1;
                 continue;
             }
+
             int value = scoreForPlayer(score,0);
-            iteration[i] = value;
-            if (value > best) { best = value; tied.count = 0; }
-            if (value == best) push(&tied,candidates.moves[i]);
-            if (score.p0 != TERMINAL_SCORE && score.p1 != TERMINAL_SCORE) resolved = 0;
+            iteration_score[i] = value;
+            if (value > iteration_best_score) {
+                iteration_best_score = value;
+                iteration_best_moves.count = 0;
+            }
+            if (value == iteration_best_score)
+                push(&iteration_best_moves,root_moves.moves[i]);
         }
-        if (!complete) break;
-        last_completed_plies=depth+1;
-        memcpy(retained, iteration, sizeof retained);
-        if (!tied.count) break; /* All root moves have proven losses. */
-        chosen = tied.moves[rand() % tied.count];
-        if (best == TERMINAL_SCORE || resolved) break;
+
+        /* Positional results from an incomplete iteration are deliberately
+           discarded.  Only the forced-loss flags above survive it. */
+        if (!iteration_complete) break;
+
+        last_completed_plies = depth_below_root + 1;
+        memcpy(retained_score,iteration_score,sizeof retained_score);
+
+        /* No unproved move remains: every legal root is a forced loss. */
+        if (!iteration_best_moves.count) break;
+
+        chosen = iteration_best_moves.moves[
+            rand() % iteration_best_moves.count
+        ];
     }
-    /* Deeper proofs override retained heuristic scores even after an interrupted iteration. */
-    Moves survivors = {0};
-    int survivor_best = -1000000;
-    for (int i=0;i<candidates.count;i++) if (!losing[i]) {
-        if (retained[i] > survivor_best) { survivor_best = retained[i]; survivors.count = 0; }
-        if (retained[i] == survivor_best) push(&survivors,candidates.moves[i]);
-    }
-    int chosen_survives = 0;
-    for (int i=0;i<survivors.count;i++)
-        if (survivors.moves[i].x == chosen.x && survivors.moves[i].y == chosen.y) chosen_survives = 1;
-    if (survivors.count && !chosen_survives)
-        chosen = survivors.moves[rand() % survivors.count];
-    return chosen;
+
+    return chooseBestRetainedMove(
+        &root_moves,retained_score,proven_loss,chosen
+    );
 }
 
 static int isLegalMove(int x, int y, Moves2 *moves)
