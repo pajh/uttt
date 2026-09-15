@@ -254,3 +254,13 @@ Added a GitHub Actions comparison with 200 alternating-start games per mode by d
 Bot timeouts, invalid replies and process exits during an individual game are now recorded as forfeits without making a completed rig batch return failure. Opening experiment wrappers likewise fail only for an incomplete subprocess or missing games; technical failures remain counted in their CSV summaries. Identity mismatch remains a hard experiment failure. Verified with a deliberately dead bot: one recorded `invalid_or_eof` forfeit, complete CSV, process exit zero.
 
 Validation: rebuilt gamerig, orig and current bot; exercised difference and ratio modes over two alternating-start games each with distinct verified hello metadata and no technical failures. Existing board test executable completed successfully. Full comparison pending GitHub dispatch.
+
+## Difference versus relative-score result
+
+GitHub Actions run 34998705791, commit 5803aa1, used 200 games per mode with identical rig seed schedules and alternating starts. Bot identities and hello strings verified difference versus ratio mode; USCALE5, count0 and exact thresholds 17/19 were pinned. Historical orig still seeds from the rig-provided value but its gameplay and timing can diverge between separate processes, so this is a controlled aggregate comparison rather than identical paired trajectories.
+
+Difference: 154 wins / 40 losses / 6 draws, four technical failures, raw match score 78.50%. All four failures were current-bot timeouts when orig started. Excluding forfeits: 154/36/6 over 196 played games, score 80.10%. Starting split: current first 89/9/2, 90.0%; orig first clean 65/27/4, 69.79%.
+
+Ratio: 151 wins / 38 losses / 11 draws, two technical failures, raw match score 78.25%. Both failures were current-bot timeouts, one under each starting side. Excluding forfeits: 151/36/11 over 198 played games, score 79.04%. Starting split clean: current first 83/12/4 over 99, 85.86%; orig first 68/24/7 over 99, 72.22%.
+
+Observed ratio-minus-difference effect is -0.25 raw score points, or about -1.06 points after excluding forfeits. This is effectively no aggregate improvement at this sample size. Ratio shifted the observed starting-side split: -4.14 points when current started and +2.43 points when orig started on clean rates, while increasing draws and reducing current count wins from 16 to 12. None establishes a causal advantage from one run. Ratio performed about 10.4% fewer heuristic evaluations (972,791,050 versus 1,086,132,749), mainly because changed games/positions and forfeits alter workloads; do not interpret this directly as evaluator speed.
