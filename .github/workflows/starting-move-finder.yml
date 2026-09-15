@@ -1,13 +1,14 @@
-name: Starting move finder
+name: Starting move class finder
 
 on:
   push:
     branches:
       - experiment/starting-moves
+      - experiment/starting-moves-smoke
   workflow_dispatch:
     inputs:
-      games_per_opening:
-        description: Games for each of the 81 opening moves
+      games_per_policy:
+        description: Games for each of nine classes and the normal baseline
         required: true
         default: "25"
       base_seed:
@@ -25,23 +26,33 @@ jobs:
       - name: Build identified bots and rig
         run: make bin/gamerig bin/orig bin/ai_search_start
 
-      - name: Test every opening on four workers
+      - name: Test nine classes and normal baseline on four workers
+        env:
+          REQUESTED_GAMES: ${{ inputs.games_per_policy }}
+          BASE_SEED: ${{ inputs.base_seed }}
+          RUN_BRANCH: ${{ github.ref_name }}
         run: |
-          python3 find-starting-moves.py \
-            --games "${{ inputs.games_per_opening }}" \
+          games="$REQUESTED_GAMES"
+          seed="$BASE_SEED"
+          if test -z "$games"; then
+            if test "$RUN_BRANCH" = "experiment/starting-moves-smoke"; then games=4; else games=100; fi
+          fi
+          if test -z "$seed"; then seed=20261001; fi
+          python3 find-starting-classes.py \
+            --games "$games" \
             --jobs 4 \
-            --seed "${{ inputs.base_seed }}" \
-            --output starting-moves
+            --seed "$seed" \
+            --output starting-classes
 
       - name: Show results ranked by match score
         if: always()
         run: |
-          if test -f starting-moves/summary.csv; then
+          if test -f starting-classes/summary.csv; then
             python3 - <<'PY'
           import csv
-          rows = list(csv.DictReader(open("starting-moves/summary.csv")))
+          rows = list(csv.DictReader(open("starting-classes/summary.csv")))
           for row in sorted(rows, key=lambda r: float(r["match_score"]), reverse=True):
-              print(f"row={row['row']} col={row['col']} grid={row['grid']} cell={row['cell']} orbit={row['orbit']} score={row['match_score']} W/L/D={row['wins']}/{row['losses']}/{row['draws']}")
+              print(f"class={row['class']} score={row['match_score']} W/L/D={row['wins']}/{row['losses']}/{row['draws']} sampled={row['unique_openings']}")
           PY
           fi
 
@@ -49,6 +60,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: starting-moves-${{ github.run_id }}
-          path: starting-moves/
+          name: starting-classes-${{ github.run_id }}
+          path: starting-classes/
           retention-days: 30

@@ -28,6 +28,7 @@ unsigned rig_seed = 20260914;
 unsigned game_seed;
 Pos forced_opening = {-1, -1};
 int fixed_starting_player = -1;
+char opening_class[3] = "";
 FILE *games_csv, *moves_csv;
 int timed_out;
 int dfs_failed[2], dfs_failed_primary[2], dfs_failed_narrow[2];
@@ -35,6 +36,18 @@ int timeouts[2], overruns[2], started_scores[2][3];
 uint64_t response_count[2], response_total[2], max_first[2], max_later[2];
 
 int failures[2];
+
+static int chooseOpeningIndex(char category) {
+    static const int middle[] = {4};
+    static const int diagonal[] = {0, 2, 6, 8};
+    static const int cardinal[] = {1, 3, 5, 7};
+    const int *choices;
+    int count;
+    if (category == 'M') { choices = middle; count = 1; }
+    else if (category == 'D') { choices = diagonal; count = 4; }
+    else { choices = cardinal; count = 4; }
+    return choices[rand() % count];
+}
 
 
 void loadWeights(const char* file_name, int weights[], double* win_per)
@@ -191,6 +204,20 @@ int playGame(int game, int player, char* p0_arg)
     uint64_t fingerprint = 14695981039346656037ULL;
     game_seed = rig_seed + (unsigned)game;
     srand(game_seed);
+    Pos game_opening = forced_opening;
+    int opening_grid = -1, opening_cell = -1;
+    if (*opening_class) {
+        opening_grid = chooseOpeningIndex(opening_class[0]);
+        opening_cell = chooseOpeningIndex(opening_class[1]);
+        game_opening.x = (opening_grid % 3) * 3 + opening_cell % 3;
+        game_opening.y = (opening_grid / 3) * 3 + opening_cell / 3;
+    } else if (fixed_starting_player == 0 && game_opening.x < 0) {
+        /* Keep the rig's later shuffle stream aligned with class-policy games. */
+        (void)rand(); (void)rand();
+    } else if (game_opening.x >= 0) {
+        opening_grid = (game_opening.y / 3) * 3 + game_opening.x / 3;
+        opening_cell = (game_opening.y % 3) * 3 + game_opening.x % 3;
+    }
     int read_pipe[2], write_pipe[2];
     int play_counts[2];
     int move_no = 0;
@@ -227,9 +254,9 @@ int playGame(int game, int player, char* p0_arg)
 
     while (board.winner < 0)
     {
-        if (move_no == 0 && forced_opening.x >= 0) {
+        if (move_no == 0 && game_opening.x >= 0) {
             valid_moves.count = 1;
-            valid_moves.moves[0] = forced_opening;
+            valid_moves.moves[0] = game_opening;
         }
 
         /* CodinGame shuffles its legal action list; this changes only ordering. */
@@ -284,6 +311,12 @@ int playGame(int game, int player, char* p0_arg)
             break;
         }
 
+        if (move_no == 1 && opening_grid < 0) {
+            game_opening = played;
+            opening_grid = (played.y / 3) * 3 + played.x / 3;
+            opening_cell = (played.y % 3) * 3 + played.x % 3;
+        }
+
         int mx = played.x / 3;
         int my = played.y / 3;
 
@@ -326,7 +359,7 @@ int playGame(int game, int player, char* p0_arg)
     if (games_csv) {
         const char *win_type = strcmp(reason,"played") ? "forfeit" : board.winner==2 ? "draw" :
             ev_cache[board.overall].p3[board.winner] ? "3iar" : "count";
-        fprintf(games_csv,"%d,%u,%d,%d,%d,%s,%d,%016llx,%s,%d,%d,%d,%d,%d,%d\n",game,game_seed,starting_player,board.winner,failure_player,reason,move_no,(unsigned long long)fingerprint,win_type,dfs_failed[0],dfs_failed[1],dfs_failed_primary[0],dfs_failed_narrow[0],dfs_failed_primary[1],dfs_failed_narrow[1]);
+        fprintf(games_csv,"%d,%u,%d,%d,%d,%d,%d,%d,%d,%s,%d,%016llx,%s,%d,%d,%d,%d,%d,%d\n",game,game_seed,game_opening.y,game_opening.x,opening_grid,opening_cell,starting_player,board.winner,failure_player,reason,move_no,(unsigned long long)fingerprint,win_type,dfs_failed[0],dfs_failed[1],dfs_failed_primary[0],dfs_failed_narrow[0],dfs_failed_primary[1],dfs_failed_narrow[1]);
         fflush(games_csv);
     }
     if (moves_csv) fflush(moves_csv);
@@ -506,9 +539,19 @@ int main(int argc,char* argv[])
             forced_opening.y = row;
             fixed_starting_player = 0;
         }
+        else if (strcmp(argv[i], "--opening-class") == 0 && i+1<argc) {
+            const char *value = argv[++i];
+            if (strlen(value) != 2 || !strchr("MDC", value[0]) || !strchr("MDC", value[1])) {
+                fputs("--opening-class requires two letters chosen from M, D and C\n", stderr);
+                return 1;
+            }
+            opening_class[0] = value[0]; opening_class[1] = value[1]; opening_class[2] = 0;
+            fixed_starting_player = 0;
+        }
+        else if (strcmp(argv[i], "--p0-first") == 0) fixed_starting_player = 0;
         else if (strcmp(argv[i], "--games-csv") == 0 && i+1<argc) {
             games_csv = fopen(argv[++i],"w"); if (!games_csv) error("games csv");
-            fputs("game,seed,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow\n",games_csv);
+            fputs("game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow\n",games_csv);
         }
         else if (strcmp(argv[i], "--moves-csv") == 0 && i+1<argc) {
             moves_csv = fopen(argv[++i],"w"); if (!moves_csv) error("moves csv");
@@ -516,19 +559,23 @@ int main(int argc,char* argv[])
         }
         else if (strcmp(argv[i], "--timeout-ms") == 0 && i+1<argc) response_ms = atoi(argv[++i]);
         else {
-            fprintf(stderr,"Usage: %s [-G<count>] [--p0 executable] [--p1 executable] [--force-opening row,col] [--timeout-ms milliseconds] [--quiet-bots] [--seed integer] [--games-csv path] [--moves-csv path]\n",argv[0]);
+            fprintf(stderr,"Usage: %s [-G<count>] [--p0 executable] [--p1 executable] [--p0-first] [--force-opening row,col | --opening-class MD] [--timeout-ms milliseconds] [--quiet-bots] [--seed integer] [--games-csv path] [--moves-csv path]\n",argv[0]);
             return 1;
         }
     }
-    if (games < 1 || response_ms < 0) return 1;
+    if (games < 1 || response_ms < 0 || (*opening_class && forced_opening.x >= 0)) return 1;
     for (int i=0;i<2;i++) {
         wordexp_t parsed;
         if(wordexp(bot_paths[i],&parsed,WRDE_NOCMD) != 0) error("Invalid quoted bot command");
         if(!parsed.we_wordc) error("Empty bot command");
         wordfree(&parsed);
     }
-    if (forced_opening.x >= 0)
+    if (*opening_class)
+        printf("%s versus %s; p0 always starts using class %s; timeout override %d ms (0 = 1200/120, warnings above 1000/100); seed %u\n",bot_paths[0],bot_paths[1],opening_class,response_ms,rig_seed);
+    else if (forced_opening.x >= 0)
         printf("%s versus %s; p0 always starts at row %d col %d; timeout override %d ms (0 = 1200/120, warnings above 1000/100); seed %u\n",bot_paths[0],bot_paths[1],forced_opening.y,forced_opening.x,response_ms,rig_seed);
+    else if (fixed_starting_player == 0)
+        printf("%s versus %s; p0 always starts normally; timeout override %d ms (0 = 1200/120, warnings above 1000/100); seed %u\n",bot_paths[0],bot_paths[1],response_ms,rig_seed);
     else
         printf("%s versus %s; alternating starts; timeout override %d ms (0 = 1200/120, warnings above 1000/100); seed %u\n",bot_paths[0],bot_paths[1],response_ms,rig_seed);
 

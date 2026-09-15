@@ -42,14 +42,14 @@ Run four local batches with one configuration:
 
 This writes one `run-*` directory directly below the repository. `summary.csv` contains verified bot identities, four worker rows and a combined total.
 
-## Starting-move finder
+## Starting-move experiments
 
-Test every one of the 81 possible opening moves locally, four games at a time:
+Compare the normal opener with the nine middle/diagonal/cardinal policies:
 
 ```sh
-python3 find-starting-moves.py --games 25 --jobs 4 --seed 20261001
+python3 find-starting-classes.py --games 100 --jobs 4 --seed 20261001
 ```
 
-For each opening, the rig gives player 0 exactly one legal move on the first turn. The bot therefore sees and plays the forced move through the normal CodinGame stdin/stdout protocol and retains correct state. Player 0 starts every game. Every opening reuses the same game-seed schedule to reduce avoidable variation. `starting-moves/summary.csv` records row, column, outer-grid id, inner-cell id, the simultaneous-board/cell symmetry orbit, W/L/D, win type and technical failures. `orbits.csv` pools the 81 coordinates into the 15 distinct empty-board symmetry classes. The run fails if any bot identity or settings message differs between openings; the verified identity is copied to `metadata.tsv`.
+`M` means middle, `D` diagonal/corner, and `C` cardinal/edge. For every game in (for example) `DC`, the rig randomly chooses a diagonal outer grid and then a cardinal cell within it. Player 0 is always our bot and always starts. `BASE` supplies the normal 81 legal moves and lets the bot choose. Every policy reuses the same seed schedule, and every game row records the exact opening row, column, grid and cell sampled or chosen.
 
-The **Starting move finder** GitHub Actions workflow runs this experiment manually. Its default is 25 games for each opening (2,025 games total), with four concurrent games. It uploads the compact summary, raw game tables, verified bot identities and logs as one artifact.
+The **Starting move class finder** GitHub Actions workflow runs 100 games for each of `BASE MM MD MC DM DD DC CM CD CC`: 1,000 games total with four concurrent policies. It uploads the policy summary, exact-opening sample frequencies, raw game tables, verified bot identities and logs as one artifact. `find-starting-moves.py` remains available for a later exhaustive 81-coordinate experiment.

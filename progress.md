@@ -4,6 +4,8 @@
 
 Added a rig-level `--force-opening row,col` option. It fixes player 0 as the starter and presents exactly that one legal move on ply zero, so the tested bot consumes the forced move through its normal CodinGame protocol and retains its normal internal state. `find-starting-moves.py` tests all 81 openings with the same seed schedule and four concurrent games, verifies that bot identity/settings are identical across every opening, and emits both coordinate-level results and the 15 simultaneous outer/inner D4 symmetry classes. The manual GitHub Actions workflow defaults to 25 games per opening (2,025 total) with USCALE 5, count scale 0 and exact-search thresholds 17/19.
 
+Revised the first hosted experiment to compare nine randomized category policies plus a normal baseline. `M` is centre, `D` diagonal/corner and `C` cardinal/edge. Each of `MM MD MC DM DD DC CM CD CC` randomly samples an eligible outer grid and eligible inner cell independently for every game; `BASE` lets the bot choose normally. Our bot is always player 0 and starts all 100 games per policy. Exact sampled/chosen coordinates are recorded. Total hosted run size is 1,000 games, with four policies concurrent.
+
 ## Control: repaired hybrid bot
 
 Historical opponent: unchanged orig.c. Current hybrid: opening rules while at least 72 playable squares remain, existing timed shallow minimax thereafter, terminal endgame solver. Six evaluator weights: 29,10,4,1,7,3. No alpha-beta or hash-table performance tuning.
