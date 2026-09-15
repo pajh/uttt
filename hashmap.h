@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define KEY_SIZE 20
+#define KEY_SIZE 26
 typedef uint32_t u32;
 
 typedef struct HMEntry_s HMEntry;
@@ -36,15 +36,17 @@ typedef struct HashMap_s {
 
 HashMap* createHM(u32 buckets, u32 entries) {
     
-    HashMap *hm = (HashMap *) malloc( sizeof(HashMap) );
+    HashMap *hm = (HashMap *) calloc(1, sizeof(HashMap));
 
+    if (!hm) { perror("hashmap allocation"); exit(1); }
     hm-> bucket_buffer = (HMEntry**) calloc( buckets, sizeof( HMEntry *) );
     hm->buckets_size = buckets;
     hm->buckets_used = 0;    
 
     hm-> entry_buffer = (HMEntry*) calloc( entries, sizeof( HMEntry ) );
     hm->entry_buffer_size = entries;
-    hm->entries_used = 0;    
+    hm->entries_used = 0;
+    if (!hm->bucket_buffer || !hm->entry_buffer) { perror("hashmap buffers"); exit(1); }
     return hm;
 }
 
@@ -119,15 +121,6 @@ void addHMEntry(HashMap *hm, unsigned char* key, u32 data ) {
 
     // Fill out next entry;
     HMEntry* my_entry = &hm->entry_buffer[hm->entries_used++];
-    if (hm->entries_used == hm->entry_buffer_size) {
-        double elapsed = getElaspedTime();
-        fprintf(stderr,"All %d hashmap entries are used (%1.3f)",hm->entry_buffer_size, elapsed);
-        /*if (current_task == Shallow) fprintf(stderr, "[Shallow]\n");
-        if (current_task == Heuristic) fprintf(stderr, "[Heuristic]\n");
-        if (current_task == Minimax) fprintf(stderr, "[Minimax]\n");*/
-        printMetrics(hm);        
-    }
-
     my_entry->data = data;
     my_entry->hash = hash;
     memcpy(my_entry->key, key, KEY_SIZE);

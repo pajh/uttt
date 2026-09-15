@@ -1,4 +1,6 @@
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <emmintrin.h>
 #include <tmmintrin.h>
@@ -57,7 +59,7 @@ void _assert(char* log) {
     exit(-1);
 }
 
-#define ASSERT(x,y) if (!x) _assert(y)
+#define ASSERT(x,y) do { if (!(x)) _assert(y); } while (0)
 
 int moveNext(Moves2* moves, Pos* p) {
     if (moves->it_count == moves->count) return 0;
@@ -69,7 +71,7 @@ int moveNext(Moves2* moves, Pos* p) {
     if (moves->it_current) {        
         unsigned int m = (moves->it_current & -moves->it_current);
         moves->it_current ^= m;
-        int m2 = __builtin_clz(m);  // count leading zeros clz( 0000 0000 0001 0000) = 4
+        int m2 = __builtin_ctz(m); /* Index of the isolated set bit. */
 
         //if (m2 > 8) {
         //    fprintf(stderr,"[m2 is wrong %u->%u]",m,m2);
@@ -130,8 +132,10 @@ static u16 inline pos2bitNo(Pos p) {
 void pushMove(Moves2* moves, Pos p) {
     u16 cell, bit;
     pos2cell(p,&cell,&bit);
-    moves->mask[cell] |= bit;
-    moves->count++;
+    if (!(moves->mask[cell] & bit)) {
+        moves->mask[cell] |= bit;
+        moves->count++;
+    }
 }
 
 void resetMoveIt(Moves2* moves) {
@@ -303,7 +307,7 @@ static inline Evaluation _evaluate(u16 board_u16, u16 full_bits)
     }
     eval_count2++;
     full_bits |= comb;
-    ev.free = countFree(comb);
+    ev.free = countFree(full_bits);
     evaluate_line(MASK_ROW << (0*3), board, &ev, full_bits);
     evaluate_line(MASK_ROW << (1*3), board, &ev, full_bits);
     evaluate_line(MASK_ROW << (2*3), board, &ev, full_bits);
@@ -467,7 +471,7 @@ static inline void addMoves(Board3 b, Moves *moves, int x_offset, int y_offset)
 
 void validMoves2(Board9 *board, Moves2 *valid_moves, int mx, int my) {
 
-    if (mx > 2 || my > 2) {
+    if (mx < 0 || my < 0 || mx > 2 || my > 2) {
         fprintf(stderr,"Invalid cell positions\n");
         exit(0);
     }
@@ -494,7 +498,7 @@ void validMoves2(Board9 *board, Moves2 *valid_moves, int mx, int my) {
 
 void validMoves(Board9 *board, Moves *valid_moves, int mx, int my)
 {
-    if (mx > 2 || my > 2) {
+    if (mx < 0 || my < 0 || mx > 2 || my > 2) {
         fprintf(stderr,"Invalid cell positions\n");
         exit(0);
     }
