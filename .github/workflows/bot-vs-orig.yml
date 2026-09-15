@@ -1,5 +1,5 @@
 name: Bot versus orig
-run-name: MM-001-RM versus orig — ${{ inputs.games }} alternating-start games
+run-name: MM-002-RM versus orig — ${{ inputs.games }} alternating-start games
 
 on:
   workflow_dispatch:

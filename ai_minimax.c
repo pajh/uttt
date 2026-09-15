@@ -404,15 +404,19 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
         roots.count++;
     }
 
-    /* Re-evaluate every non-losing move two plies deeper.  A completed root
-       overwrites its previous score immediately, so an interrupted iteration
-       leaves a deliberate mixture of depths for the ratio score to compare. */
-    const int maximum_target_plies = 6;
+    /* Four plies is the safety floor: current timing evidence says it always
+       completes, while the old two-ply pass only consumed time.  There is no
+       arbitrary depth ceiling.  Keep adding two plies until the clock stops
+       us; each completed root immediately replaces its shallower score, so
+       the final choice deliberately merges scores from different depths. */
     int time_expired = 0;
-    for (int target_plies=2;
-         target_plies<=maximum_target_plies && !time_expired;
-         target_plies+=2) {
+    for (int target_plies=4; !time_expired; target_plies+=2) {
         clearHM(map);
+
+        int searchable_roots = 0;
+        for (int i=0;i<roots.count;i++)
+            searchable_roots += roots.moves[i].proof != RootForcedLoss;
+        if (searchable_roots == 0) break;
 
         for (int i=0;i<roots.count;i++) {
             RootMove *root = &roots.moves[i];
@@ -463,6 +467,10 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
     int best_score = -TERMINAL_SCORE-1;
     Moves best_moves = {0};
     for (int i=0;i<roots.count;i++) {
+        /* Normally every root has a four-ply score.  If exceptionally little
+           time was available, do not let an unsearched zero beat a searched
+           negative score merely because RootMoves was zero-initialised. */
+        if (roots.moves[i].evaluated_plies == 0) continue;
         if (roots.moves[i].score > best_score) {
             best_score = roots.moves[i].score;
             best_moves.count = 0;
@@ -470,6 +478,8 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
         if (roots.moves[i].score == best_score)
             push(&best_moves,roots.moves[i].move);
     }
+    if (best_moves.count == 0)
+        return roots.moves[rand() % roots.count].move;
 #ifdef DEBUG
     debug_selected_score = best_score;
 #endif
@@ -619,13 +629,13 @@ int main(int argc,char* argv[])
 #endif
     if (getenv("CG_LOCAL_HELLO")) {
 #ifdef DEBUG
-        const char *version = score_mode == ScoreRatio ? "MM-001-RMD" : "MM-001-DMD";
+        const char *version = score_mode == ScoreRatio ? "MM-002-RMD" : "MM-002-DMD";
         const char *debug_metadata = "debug=1; ";
 #else
-        const char *version = score_mode == ScoreRatio ? "MM-001-RM" : "MM-001-DM";
+        const char *version = score_mode == ScoreRatio ? "MM-002-RM" : "MM-002-DM";
         const char *debug_metadata = "";
 #endif
-        printf("@BOT\t%s\tbuild=%s; %sopening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; score-mode=%s; partial-depth=merge; relative-scale=%d; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",version,BOT_BUILD_ID,debug_metadata,exact_primary_spaces,exact_narrow_spaces,score_mode==ScoreRatio?"ratio":"difference",RELATIVE_SCORE_SCALE,uscale,count_scale,(int)(20*count_scale+0.5));
+        printf("@BOT\t%s\tbuild=%s; %sopening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; score-mode=%s; shallow-plies=4-until-timeout; partial-depth=merge; relative-scale=%d; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",version,BOT_BUILD_ID,debug_metadata,exact_primary_spaces,exact_narrow_spaces,score_mode==ScoreRatio?"ratio":"difference",RELATIVE_SCORE_SCALE,uscale,count_scale,(int)(20*count_scale+0.5));
         fflush(stdout);
     }
     int turn = 0;

@@ -40,7 +40,7 @@ headers = [
     ("deepest_completed_ply", "Deepest completed ply"),
     ("winning_row", "Winning row"),
     ("winning_col", "Winning col"),
-    ("winning_score", "Winning score"),
+    ("winning_score", "Selected backed-up score"),
     ("scored_positions", "Scored positions"),
     ("cache_lookups", "Cache lookups"),
     ("cache_hits", "Cache hits"),
@@ -53,7 +53,7 @@ for row in rows:
     table_rows.append(f"<tr>{cells}</tr>")
 
 document = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>MM-001-RMD one-game report</title>
+<html><head><meta charset="utf-8"><title>MM-002-RMD one-game report</title>
 <style>
 body {{ font: 14px system-ui, sans-serif; margin: 24px; color: #17202a; }}
 h1,h2 {{ margin-bottom: .4rem; }} .note {{ color:#566573; }}
@@ -69,8 +69,9 @@ h1,h2 {{ margin-bottom: .4rem; }} .note {{ color:#566573; }}
 table {{ border-collapse:collapse; margin-top:14px; }} th,td {{ border:1px solid #ccd1d1; padding:5px 8px; text-align:right; }}
 th {{ background:#eaf2f8; position:sticky; top:0; }} td:last-child,th:last-child {{ text-align:left; }}
 </style></head><body>
-<h1>MM-001-RMD: one-game search report</h1>
+<h1>MM-002-RMD: one-game search report</h1>
 <p class="note">Each coloured block represents 10 ms, rounded up. The bot targets 900 ms on its opening move and 90 ms thereafter, leaving arena safety margin.</p>
+<p class="note">Positional scores use 10000 × (ours − theirs) / (ours + theirs + 2): 0 is neutral, 1000 is a 10% normalized advantage, and ±60000 is a proved terminal result.</p>
 <h2>Opening move — {float(opening['elapsed_ms']):.3f} ms</h2>
 {block_bar(opening, True)}
 <h2>Regular turns — 10 ms vertical blocks</h2>

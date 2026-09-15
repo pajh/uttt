@@ -284,3 +284,23 @@ Local four-worker run, 100 alternating-start games, seed 20261001, MM-001-RM bui
 ## One-game DEBUG search report
 
 Added compile-time-only `DEBUG` telemetry and `bin/ai_search_debug`, identified as `MM-001-RMD` with an exact build hash. Production builds contain no CSV file output. Per bot turn the debug CSV records budget and elapsed milliseconds, legal roots, completed root evaluations across depths, deepest completed ply, selected move and fixed-point score, static leaf score count, total cache lookups/hits across cache clears, and shallow/exact/fallback search mode. `debug-one-game.sh` runs one identified game; `debug-report.py` creates a standalone HTML report with the 900 ms opening shown separately, regular turns plotted as 10 ms vertical blocks, and the requested move table. Generated `debug-game/report.html` from a clean 39-ply current-bot 3IAR win; our bot made 20 moves with no technical failure. Production and DEBUG builds compile warning-clean and the board test exits zero.
+
+## MM-001-RM 1,000-game confirmation
+
+GitHub Actions run 35034282004, commit 15b0fe369e3740c5ea905ab35e8101bd885b2e6a, completed 1,000 alternating-start games. Verified bot identity was MM-001-RM build d6a6edcd86b1c048 against orig 21d1b83935be6da9, with ratio scoring, mixed partial-depth merge, USCALE5/count0 and exact thresholds 17/19. The run completed with zero technical failures.
+
+Overall: 798 wins / 183 losses / 19 draws, match score 80.75%. The approximate 95% interval for match score is 78.34%-83.16%. Wins comprised 718 by 3IAR and 80 by count; orig won 174 by 3IAR and 9 by count. Current-bot exact search failed and fell back 55 times (36 primary, 19 narrow); orig did so 49 times. Current-bot work totalled 4,786,538,398 evaluations, including 1,632,871,791 count-differential evaluations.
+
+Starting split: with MM-001-RM first, 430/65/5 over 500 games, score 86.50%; with orig first, MM-001-RM scored 368/118/14, score 75.00%. The 11.5-point first-player effect is clear. The overall result confirms the local 100-game observation near 81%, but does not establish a meaningful improvement over the earlier 200-game ratio/no-merge score of 78.25% because that prior batch is small and had two technical losses. Treat MM-001-RM as an approximately 80%-81% opponent score against orig, not a 10-0 replacement yet.
+
+## MM-002-RM open-ended iterative depth
+
+Removed the artificial six-ply shallow-search ceiling. Shallow iterative search now starts at four plies, then attempts 6, 8, 10 and so on until the deadline. Every completed root immediately overwrites that move's previous score, retaining the mixed-depth merge behaviour. Four ply is the safety baseline because the DEBUG evidence showed the bot reaching at least six ply, although the report's depth field means at least one root completed at that depth rather than the entire iteration.
+
+Added two defensive cases required by the new loop: stop if every root is already a proved forced loss, avoiding a zero-work infinite loop; and exclude never-evaluated roots from score selection if an exceptional timeout interrupts the initial four-ply pass, falling back to a random legal root only if no root was evaluated. Updated bot identity to MM-002-RM/MM-002-RMD and hello metadata now states `shallow-plies=4-until-timeout`.
+
+Validation: warning-clean production and DEBUG builds, existing board test passed, and a two-game alternating-start smoke test completed with zero technical failures. A separate identified DEBUG game won cleanly and reported mostly six-ply shallow results; no eight-ply root completed in that single game, so the immediate benefit is additional six-ply root coverage rather than demonstrated eight-ply information. Strength remains unmeasured pending a proper comparison run.
+
+Fresh MM-002-RMD report: identified build 27db7f6bf57708b1 beat orig by 3IAR in 55 plies with zero failures. Regular turns remained within the 90 ms target. Shallow search generally completed at least one six-ply root and spent the remaining allowance attempting deeper work; no shallow eight-ply root completed. The report now labels the value as the selected backed-up score and documents the normalized-difference scale.
+
+Local MM-002-RM gate: 100 alternating-start games over four workers, seed 20261001, produced 73 wins / 25 losses / 2 draws, score 74.0%, with zero technical failures. Worker scores were 88%, 78%, 80% and 50%, demonstrating substantial batch variation. This is below both MM-001-RM's local 81.5% observation and its 1,000-game 80.75% result. The protocol/build gate passed, but the strength result is not positive; a requested 1,000-game GitHub run will determine whether this is noise or a regression.
