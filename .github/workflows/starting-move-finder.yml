@@ -1,6 +1,9 @@
 name: Starting move finder
 
 on:
+  push:
+    branches:
+      - experiment/starting-moves
   workflow_dispatch:
     inputs:
       games_per_opening:
