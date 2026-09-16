@@ -23,13 +23,13 @@ int main(int argc,char **argv) {
         Moves2 moves={0};
         if(target<0) { for(int y=0;y<9;y++) for(int x=0;x<9;x++) pushMove(&moves,(Pos){x,y}); }
         else validMoves2(&board,&moves,target%3,target/3);
-        if(!moveIn(col,row,&moves)){fprintf(stderr,"Illegal replay move at ply %d\n",ply);return 1;}
+        if(!isLegalMove(col,row,&moves)){fprintf(stderr,"Illegal replay move at ply %d\n",ply);return 1;}
         clearHM(map);
         if(p==0) fprintf(stderr,"Scoring ply %d at %d plies\n",ply,plies);
         if(p==0) for(int y=0;y<9;y++) for(int x=0;x<9;x++) {
             int ci=(y/3)*3+x/3,bit=(y%3)*3+x%3;
             Board3 b=B3(board.cell[ci]);int mark=(b.p[0]&(1<<bit))?1:(b.p[1]&(1<<bit))?2:0;
-            int legal=!!moveIn(x,y,&moves),top=0,local=0,count=0,value=0,immediate=0;
+            int legal=isLegalMove(x,y,&moves),top=0,local=0,count=0,value=0,immediate=0;
             const char *outcome="heuristic";
             if(legal) {
                 Board9 after=board;set9(&after,x,y,p);
