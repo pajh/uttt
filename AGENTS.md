@@ -54,10 +54,36 @@ not a strength improvement until it has a recorded, reproducible comparison.
 5. Keep raw data only long enough to support the conclusion.  Curated results
    may go under `published-results/`; the progress log is the durable record.
 
-Raw experiment output should be written under `artifacts/runs/`.  It is ignored
-by Git and can be safely pruned after the retention window.  Never automate
-deletion of `progress.md`, `published-results/`, source files, or a run the user
-has explicitly asked to preserve.
+Generated reports belong in ignored `reports/`; logs, CSV game data and other
+supporting evidence belong in ignored `work/`. Preserve the numbered raw run
+folders alongside any report being cited in `progress.md`. Never automate
+deletion of `progress.md`, `published-results/`, source files, or a run the
+user explicitly asked to preserve.
+
+The normal bot also reports one cumulative end-of-game local stats
+record (timed search microseconds, scored positions, cache hits), independent
+of `INSTRUMENT`; the rig stores it in each game CSV row. `scripts/summarize-rig.py`
+totals these and computes positions/s from the totals. Use
+`fish scripts/interpret_multi_csv.fish` to render the latest summary as HTML,
+or pass a specific summary CSV path.
+
+## Tool output convention
+
+- New scripts should be written in fish.  A repeatable tool command should
+  always write the same readable report name, such as
+  `reports/latest-analysis.html` or `reports/instrument/report.html`.
+- Before replacing `name.ext`, source `scripts/rotate-report.fish` and call
+  `rotate_report name.ext`.  It finds the highest positive integer `N` in
+  `name.N.ext` and moves the current report to `name.(N+1).ext`.  The new
+  report then takes the original, stable name.  Use this for readable output
+  files, not raw intermediate data.
+- Keep intermediate files under `work/`. A new run clears its preflight files
+  and archives the prior successful raw run as `work/latest.N/`. If a run or
+  summarizer fails, retain its raw files so
+  `fish scripts/resummarize.fish <run-directory>` can retry without replaying games.
+- Run a short end-to-end preflight through parsing and report generation
+  before starting a long batch.  Never leave a summarizer's first execution
+  until after the expensive work.
 
 ## Tool and context budget
 

@@ -27,7 +27,7 @@ char *bot_paths[2] = {"./bin/orig", "./bin/ai_random"};
 pid_t bot_pids[2];
 int response_ms = 0; /* Zero allows 20% grace beyond arena limits. */
 int quiet_bots = 0;
-FILE *identity_file, *usage_file;
+FILE *identity_file;
 char bot_identity[2][2048];
 unsigned rig_seed = 20260914;
 unsigned game_seed;
@@ -39,6 +39,8 @@ int timed_out;
 int dfs_failed[2], dfs_failed_primary[2], dfs_failed_narrow[2];
 int timeouts[2], overruns[2], started_scores[2][3];
 uint64_t response_count[2], response_total[2], max_first[2], max_later[2];
+uint64_t game_search_us[2], game_positions[2], game_cache_hits[2];
+int game_stats_present[2];
 
 int failures[2];
 
@@ -112,11 +114,11 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
         char seed[32];
         snprintf(seed,sizeof(seed),"%u",game_seed ^ (cmd == bot_paths[0] ? 0x12345678u : 0x87654321u));
         setenv("CG_SEED",seed,1);
+        setenv("CG_LOCAL_STATS","1",1);
         if (quiet_bots) {
             int null_fd = open("/dev/null",O_WRONLY);
             if (null_fd >= 0) { dup2(null_fd,STDERR_FILENO); close(null_fd); }
         }
-        setenv("CG_LOCAL_HELLO","1",1);
         wordexp_t words;
         if (wordexp(file,&words,WRDE_NOCMD) != 0 || !words.we_wordc) _exit(125);
         char *args[words.we_wordc+2];
@@ -133,6 +135,36 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
     return pid;
 }
 
+/* Runs a bot's optional --HELLO command once before a batch.  Historical bots
+   need not implement it; their absence is recorded plainly rather than faked. */
+static void collectBotHello(int player) {
+    int read_pipe, write_pipe;
+    pid_t pid = runAndLink(bot_paths[player], bot_paths[player], "--HELLO",
+        &read_pipe, &write_pipe);
+    close(write_pipe);
+
+    struct pollfd ready = {read_pipe, POLLIN, 0};
+    char hello[256] = "(no --HELLO response)";
+    if (poll(&ready, 1, 200) > 0) {
+        ssize_t count = read(read_pipe, hello, sizeof(hello) - 1);
+        if (count > 0) {
+            hello[count] = 0;
+            hello[strcspn(hello, "\r\n")] = 0;
+        }
+    }
+    close(read_pipe);
+    kill(pid, SIGTERM);
+    waitpid(pid, NULL, 0);
+
+    strncpy(bot_identity[player], hello, sizeof(bot_identity[player]) - 1);
+    bot_identity[player][sizeof(bot_identity[player]) - 1] = 0;
+    fprintf(stderr, "Player %d hello: %s\n", player, bot_identity[player]);
+    if (identity_file) {
+        fprintf(identity_file, "%d\t%s\n", player, bot_identity[player]);
+        fflush(identity_file);
+    }
+}
+
 int writeAll(int fd, const char *text, size_t length) {
     while (length) {
         ssize_t n = write(fd, text, length);
@@ -144,6 +176,37 @@ int writeAll(int fd, const char *text, size_t length) {
 }
 
 uint64_t get_gtod_clock_time(void);
+/* Reads one optional final stats record after the rig closes a bot's stdin. */
+static void collectGameStats(int player, int read_pipe)
+{
+    char line[160];
+    size_t length = 0;
+    uint64_t deadline = get_gtod_clock_time() + 100000;
+    while (length < sizeof(line)-1) {
+        uint64_t now = get_gtod_clock_time();
+        if (now >= deadline) break;
+        struct pollfd ready = {read_pipe, POLLIN, 0};
+        int result = poll(&ready, 1, (int)((deadline-now+999)/1000));
+        if (result < 0 && errno == EINTR) continue;
+        if (result <= 0) break;
+        char ch;
+        ssize_t n = read(read_pipe, &ch, 1);
+        if (n < 0 && errno == EINTR) continue;
+        if (n != 1) break;
+        if (ch != '\n') { line[length++] = ch; continue; }
+        line[length] = 0;
+        unsigned long long search_us, positions, hits;
+        if (sscanf(line, "@GAME_STATS %llu %llu %llu", &search_us, &positions, &hits) == 3) {
+            game_search_us[player] = search_us;
+            game_positions[player] = positions;
+            game_cache_hits[player] = hits;
+            game_stats_present[player] = 1;
+            return;
+        }
+        length = 0;
+    }
+}
+
 Pos getMove(int player, Pos last_move, Moves *valid_moves, int read_pipe, int write_pipe, int move_no, int limit_ms) {
     Pos failed = {-1,-1};
     timed_out = 0;
@@ -171,35 +234,6 @@ Pos getMove(int player, Pos last_move, Moves *valid_moves, int read_pipe, int wr
         if (n != 1) return failed;
         bcache[length++] = ch; bcache[length] = 0;
         if (ch == '\n') {
-            if (!strncmp(bcache,"@DFS_FAILED\t",12)) {
-                int spaces,legal;
-                char trigger[16];
-                if(sscanf(bcache+12,"%d%d%15s",&spaces,&legal,trigger)!=3) return failed;
-                dfs_failed[player]++;
-                if(!strcmp(trigger,"primary")) dfs_failed_primary[player]++; else if(!strcmp(trigger,"narrow")) dfs_failed_narrow[player]++; else return failed;
-                length=0; bcache[0]=0; continue;
-            }
-            if (strncmp(bcache,"@USE\t",5)==0) {
-                unsigned long calls,active;
-                if(sscanf(bcache+5,"%lu%lu",&calls,&active)!=2) return failed;
-                if(usage_file) { fprintf(usage_file,"%d,%lu,%lu\n",player,calls,active); fflush(usage_file); }
-                length=0; bcache[0]=0; continue;
-            }
-            if (strncmp(bcache,"@BOT\t",5)==0) {
-                if (!strchr(bcache+5,'\t')) return failed;
-                if (*bot_identity[player] && strcmp(bot_identity[player],bcache)) {
-                    fprintf(stderr,"BOT IDENTITY CHANGED: player %d\n",player); return failed;
-                }
-                if (!*bot_identity[player]) {
-                    strcpy(bot_identity[player],bcache);
-                    if(identity_file) { fprintf(identity_file,"%d\t%s",player,bcache+5); fflush(identity_file); }
-                    fprintf(stderr,"Player %d hello: %s",player,bcache+5);
-                }
-                length=0; bcache[0]=0; continue;
-            }
-            if(identity_file && !*bot_identity[player]) {
-                fprintf(stderr,"MISSING BOT HELLO: player %d\n",player); return failed;
-            }
             Pos p;
             if (sscanf(bcache, "%d%d", &p.y, &p.x) != 2) return failed;
             return p;
@@ -216,6 +250,10 @@ uint64_t get_gtod_clock_time(void) {
 
 int playGame(int game, int player, char* p0_arg)
 {
+    memset(game_search_us, 0, sizeof(game_search_us));
+    memset(game_positions, 0, sizeof(game_positions));
+    memset(game_cache_hits, 0, sizeof(game_cache_hits));
+    memset(game_stats_present, 0, sizeof(game_stats_present));
     dfs_failed[0]=dfs_failed[1]=0;
     dfs_failed_primary[0]=dfs_failed_primary[1]=0;
     dfs_failed_narrow[0]=dfs_failed_narrow[1]=0;
@@ -371,6 +409,7 @@ int playGame(int game, int player, char* p0_arg)
 
     for (int i=0;i<2;i++) {
         close(write_pipe[i]);
+        collectGameStats(i, read_pipe[i]);
         close(read_pipe[i]);
         /* Bots may not handle EOF; terminate and reap every match process. */
         kill(bot_pids[i], SIGTERM);
@@ -381,7 +420,7 @@ int playGame(int game, int player, char* p0_arg)
     if (games_csv) {
         const char *win_type = strcmp(reason,"played") ? "forfeit" : board.winner==2 ? "draw" :
             ev_cache[board.overall].p3[board.winner] ? "3iar" : "count";
-        fprintf(games_csv,"%d,%u,%d,%d,%d,%d,%d,%d,%d,%s,%d,%016llx,%s,%d,%d,%d,%d,%d,%d\n",game,game_seed,game_opening.y,game_opening.x,opening_grid,opening_cell,starting_player,board.winner,failure_player,reason,move_no,(unsigned long long)fingerprint,win_type,dfs_failed[0],dfs_failed[1],dfs_failed_primary[0],dfs_failed_narrow[0],dfs_failed_primary[1],dfs_failed_narrow[1]);
+        fprintf(games_csv,"%d,%u,%d,%d,%d,%d,%d,%d,%d,%s,%d,%016llx,%s,%d,%d,%d,%d,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%llu,%llu\n",game,game_seed,game_opening.y,game_opening.x,opening_grid,opening_cell,starting_player,board.winner,failure_player,reason,move_no,(unsigned long long)fingerprint,win_type,dfs_failed[0],dfs_failed[1],dfs_failed_primary[0],dfs_failed_narrow[0],dfs_failed_primary[1],dfs_failed_narrow[1],game_stats_present[0],(unsigned long long)game_search_us[0],(unsigned long long)game_positions[0],(unsigned long long)game_cache_hits[0],game_stats_present[1],(unsigned long long)game_search_us[1],(unsigned long long)game_positions[1],(unsigned long long)game_cache_hits[1]);
         fflush(games_csv);
     }
     if (moves_csv) fflush(moves_csv);
@@ -543,11 +582,6 @@ int main(int argc,char* argv[])
         else if (strcmp(argv[i], "--p1") == 0 && i+1<argc) bot_paths[1] = argv[++i];
         else if (strcmp(argv[i], "--identity-file") == 0 && i+1<argc) {
             identity_file=fopen(argv[++i],"w"); if(!identity_file) error("identity file");
-            char *usage_path=malloc(strlen(argv[i])+12);
-            sprintf(usage_path,"%s.usage.csv",argv[i]);
-            usage_file=fopen(usage_path,"w"); free(usage_path);
-            if(!usage_file) error("usage file");
-            fputs("player,evaluations,count_differential_evaluations\n",usage_file);
         }
         else if (strcmp(argv[i], "--quiet-bots") == 0) quiet_bots = 1;
         else if (strcmp(argv[i], "--seed") == 0 && i+1<argc) rig_seed = (unsigned)strtoul(argv[++i],NULL,10);
@@ -578,7 +612,7 @@ int main(int argc,char* argv[])
         else if (strcmp(argv[i], "--p0-first") == 0) fixed_starting_player = 0;
         else if (strcmp(argv[i], "--games-csv") == 0 && i+1<argc) {
             games_csv = fopen(argv[++i],"w"); if (!games_csv) error("games csv");
-            fputs("game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow\n",games_csv);
+            fputs("game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow,p0_stats_present,p0_search_us,p0_positions_scored,p0_cache_hits,p1_stats_present,p1_search_us,p1_positions_scored,p1_cache_hits\n",games_csv);
         }
         else if (strcmp(argv[i], "--moves-csv") == 0 && i+1<argc) {
             moves_csv = fopen(argv[++i],"w"); if (!moves_csv) error("moves csv");
@@ -597,6 +631,7 @@ int main(int argc,char* argv[])
         if(!parsed.we_wordc) error("Empty bot command");
         wordfree(&parsed);
     }
+    for (int i=0;i<2;i++) collectBotHello(i);
     if (*opening_class)
         printf("%s versus %s; p0 always starts using class %s; timeout override %d ms (0 = 1200/120, warnings above 1000/100); seed %u\n",bot_paths[0],bot_paths[1],opening_class,response_ms,rig_seed);
     else if (forced_opening.x >= 0)

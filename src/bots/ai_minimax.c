@@ -1,15 +1,28 @@
 /*
- * Current competition bot.  The turn loop maintains a Board9 from the arena
- * protocol, then chooses through timed shallow minimax and (late-game) exact
- * search.  board.h and hashmap.h are deliberately included as implementation
- * headers so `subst` can make a standalone submission from this file.
+ * Current Ultimate Tic-Tac-Toe competition bot.
+ *
+ * The main loop reconstructs the board from CodinGame's stdin protocol.  Each
+ * turn uses iterative shallow minimax until its deadline, with a separate
+ * exact solver in compact late-game positions.  board.h, hashmap.h and the
+ * optional instrument.h are implementation headers so `subst` can create the
+ * single C file required for submission.
+ *
+ * Internal coordinates are x = column, y = row; CodinGame I/O is row column.
  */
 #pragma GCC optimize "O3,omit-frame-pointer,inline"
 #pragma GCC target("lzcnt,popcnt")
 
-#ifndef OPENING_SEARCH_THRESHOLD
-#define OPENING_SEARCH_THRESHOLD 72
-#endif
+/* ================================ LEVERS ================================
+ * Change and record these values for an experiment.  The bot accepts no
+ * behaviour-changing command-line options: a build has one clear identity.
+ * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
+ */
+#define HELLO_TEXT "MM-003-R" /* M = minimax, 003 = experiment counter, R = ratio score. */
+#define OPENING_SEARCH_THRESHOLD 82
+#define LEVER_USCALE 5
+#define LEVER_COUNT_SCALE 1.0
+#define LEVER_EXACT_PRIMARY_SPACES 17
+#define LEVER_EXACT_NARROW_SPACES 19
 
 #define MAX_TIME 0.0900
 #define TERMINAL_SCORE 60000
@@ -32,6 +45,7 @@ uint64_t start_time;
 double move_budget = MAX_TIME;
 double search_deadline;
 uint64_t search_nodes;
+/* Returns monotonic microseconds for search deadlines and timing telemetry. */
 uint64_t get_gtod_clock_time ()
 {
     struct timespec tv;
@@ -39,53 +53,33 @@ uint64_t get_gtod_clock_time ()
     return (uint64_t)tv.tv_sec * 1000000 + tv.tv_nsec / 1000;
 }
 
+/* Returns seconds elapsed since the current turn began. */
 double getElaspedTime() {
     uint64_t elasped = get_gtod_clock_time() - start_time;
     return ( (double)elasped ) / 1000000.0;
 }
 
 #include "hashmap.h"
+/* Game totals are reported only to the local rig, after stdin closes. */
+static unsigned long long game_search_us, game_positions, game_cache_hits;
+static unsigned long turn_cache_hits;
+
+/* Counts successful cache probes in normal and instrumented builds. */
+static int searchCacheFind(HashMap *hm, unsigned char *key, u32 *data)
+{
+    int found = findHMEntry(hm, key, data);
+    if (found) turn_cache_hits++;
+    return found;
+}
+#include "instrument.h"
 
 // Globals
 HashMap* map;
 int spaces_left;
 uint32_t mm_score_count = 0;
-static unsigned long evaluation_calls, count_differential_calls;
+static unsigned long evaluation_calls;
 
-#ifdef DEBUG
-static unsigned long debug_cache_lookups;
-static unsigned long debug_cache_hits;
-static int debug_root_evaluations;
-static int debug_deepest_plies;
-static int debug_selected_score;
-static const char *debug_search = "shallow";
-static const char *debug_file = "debug-turns.csv";
-
-static int debugFindHMEntry(HashMap *hm, unsigned char *key, u32 *data) {
-    debug_cache_lookups++;
-    int found = findHMEntry(hm,key,data);
-    if (found) debug_cache_hits++;
-    return found;
-}
-
-static void writeDebugTurn(int turn, int budget_ms, int legal_moves, Pos selected) {
-    FILE *file = fopen(debug_file,"a+");
-    if (!file) return;
-    fseek(file,0,SEEK_END);
-    if (ftell(file) == 0)
-        fputs("move,budget_ms,elapsed_ms,legal_moves,possibilities_evaluated,deepest_completed_ply,winning_row,winning_col,winning_score,scored_positions,cache_lookups,cache_hits,search\n",file);
-    fprintf(file,"%d,%d,%.3f,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu,%s\n",
-        turn,budget_ms,getElaspedTime()*1000.0,legal_moves,
-        debug_root_evaluations,debug_deepest_plies,selected.y,selected.x,
-        debug_selected_score,evaluation_calls,debug_cache_lookups,
-        debug_cache_hits,debug_search);
-    fclose(file);
-}
-#define SEARCH_CACHE_FIND(hm,key,data) debugFindHMEntry(hm,key,data)
-#else
-#define SEARCH_CACHE_FIND(hm,key,data) findHMEntry(hm,key,data)
-#endif
-
+/* Prints a fatal diagnostic and terminates the bot. */
 void error(const char *format, ...)
 {    
     va_list args;
@@ -97,6 +91,7 @@ void error(const char *format, ...)
     exit(-1);
 }
 
+/* Counts open cells in all unfinished small boards. */
 int calcPlayable(Board9* board) {
     int free = 0;
     for (int x=0;x<3;x++) {
@@ -110,10 +105,12 @@ int calcPlayable(Board9* board) {
     return free;
 }
 
+/* Appends every move from src to dest. */
 void copyMoves(Moves* dest, Moves* src) {
     for(int i=0;i<src->count;i++) push(dest,src->moves[i]);
 }
 
+/* Groups immediate game wins and promising small-board moves first. */
 void sortMoves(Board9 *board, Moves *valid_moves, int player) {
 
     if (valid_moves->count <= 1) return;
@@ -152,10 +149,7 @@ void sortMoves(Board9 *board, Moves *valid_moves, int player) {
     }
 }
 
-/* Keys encode the entire playable state, directed destination, turn and horizon.
-   Explicit bytes avoid struct padding; completed entries always store exact values. */
-/* Encode every search-relevant state byte explicitly, avoiding padding and
- * distinguishing directed-board, side-to-move and horizon variants. */
+/* Encodes state, destination, player and horizon into a padding-free cache key. */
 void searchKey(Board9 *board, u16 bit, int next_player, int depth, unsigned char key[KEY_SIZE]) {
     int offset = 0;
     for (int i=0;i<9;i++) {
@@ -172,11 +166,12 @@ void searchKey(Board9 *board, u16 bit, int next_player, int depth, unsigned char
     key[offset++] = (unsigned)depth >> 8;
 }
 
+/* Samples the clock every 64 nodes to amortise timing overhead. */
 int searchExpired(void) {
     return ((search_nodes++ & 63) == 0) && getElaspedTime() >= search_deadline;
 }
 
-/* Flags are derived from the position, so cached scores need no extra mode key. */
+/* Returns a bit per player when that player still has a possible master line. */
 static unsigned possibleMasterLines(Board9 board) {
     const u16 lines[8] = {7,56,448,73,146,292,273,84};
     Board3 owned = B3(board.overall);
@@ -191,6 +186,7 @@ static unsigned possibleMasterLines(Board9 board) {
     return possible;
 }
 
+/* Proves a count-based winner when remaining boards cannot change the lead. */
 static int countProof(Board9 board, unsigned possible) {
     Board3 owned = B3(board.overall);
     int lead = POPCNT(owned.p[0]) - POPCNT(owned.p[1]);
@@ -200,6 +196,7 @@ static int countProof(Board9 board, unsigned possible) {
     return -1;
 }
 
+/* Solves a late-game move exactly, returning p0 win, draw, p1 win, or timeout. */
 int scoreMoveMM(Board9 board, Pos p, int player, int depth) {
     (void)depth;
     if (searchExpired()) return -2;
@@ -227,6 +224,7 @@ int scoreMoveMM(Board9 board, Pos p, int player, int depth) {
     return best;
 }
 
+/* Chooses an exact-search root move, or returns the timeout sentinel. */
 Pos evaluateMovesMM(Board9 *board, Moves2 *valid_moves) {
     clearHM(map);
     resetMoveIt(valid_moves);
@@ -237,23 +235,16 @@ Pos evaluateMovesMM(Board9 *board, Moves2 *valid_moves) {
         if (getElaspedTime() >= search_deadline) return (Pos){255,255};
         int score = scoreMoveMM(*board, move, 0, 0);
         if (score == -2) return (Pos){255,255};
-#ifdef DEBUG
-        debug_root_evaluations++;
-        debug_deepest_plies = spaces_left;
-#endif
+        INSTRUMENT_ROOT_EVALUATED(spaces_left);
         if (score < best) { best = score; tied.count = 0; }
         if (score == best) push(&tied, move);
         /* A proven win needs no further comparison. */
         if (best == -1) {
-#ifdef DEBUG
-            debug_selected_score = TERMINAL_SCORE;
-#endif
+            INSTRUMENT_SELECTED(TERMINAL_SCORE);
             return move;
         }
     }
-#ifdef DEBUG
-    debug_selected_score = best == 1 ? -TERMINAL_SCORE : 0;
-#endif
+    INSTRUMENT_SELECTED(best == 1 ? -TERMINAL_SCORE : 0);
     return tied.moves[rand() % tied.count];
 }
 
@@ -262,25 +253,17 @@ typedef struct Score_s {
     u16 p1;
 } Score;
 
-#ifndef DEFAULT_COUNT_SCALE
-#define DEFAULT_COUNT_SCALE 1.0
-#endif
-static double count_scale = DEFAULT_COUNT_SCALE;
-enum ScoreMode { ScoreDifference, ScoreRatio };
-static enum ScoreMode score_mode = ScoreDifference;
-#ifndef USCALE
-#define USCALE 10
-#endif
-static int uscale = USCALE;
-static int exact_primary_spaces = 17;
-static int exact_narrow_spaces = 19;
+/* Mutable only so the in-process regression fixtures can cover alternatives;
+   production has no command-line path that changes these lever defaults. */
+static double count_scale = LEVER_COUNT_SCALE;
+static int uscale = LEVER_USCALE;
+static int exact_primary_spaces = LEVER_EXACT_PRIMARY_SPACES;
+static int exact_narrow_spaces = LEVER_EXACT_NARROW_SPACES;
 #define COUNT_UNIT 20
 static u16 f1_cache[POSS_BOARDS][2];
 static const u16 scoring_lines[8] = {7,56,448,73,146,292,273,84};
 
-/* Terminal outcomes keep their absolute ordering.  Positional strengths may
-   instead be compared as a bounded relative advantage; adding one to each
-   side prevents an empty 0/0 evaluation from creating a zero denominator. */
+/* Converts a two-player score to p0/p1's bounded relative advantage. */
 static int scoreForPlayer(Score score, int player) {
     if (score.p0 == TERMINAL_SCORE && score.p1 == 0)
         return player == 0 ? TERMINAL_SCORE : -TERMINAL_SCORE;
@@ -288,9 +271,7 @@ static int scoreForPlayer(Score score, int player) {
         return player == 1 ? TERMINAL_SCORE : -TERMINAL_SCORE;
     int mine = player == 0 ? score.p0 : score.p1;
     int theirs = player == 0 ? score.p1 : score.p0;
-    if (score_mode == ScoreRatio)
-        return RELATIVE_SCORE_SCALE * (mine - theirs) / (mine + theirs + 2);
-    return mine - theirs;
+    return RELATIVE_SCORE_SCALE * (mine - theirs) / (mine + theirs + 2);
 }
 
 /* Grid potential: distinct winning cells plus unblocked one-mark lines.
@@ -301,10 +282,12 @@ static int f1_raw(u16 grid, u16 closed, int player) {
     int wins = POPCNT(player ? ev.p1_winners : ev.p0_winners);
     return (wins == 0 ? 0 : wins == 1 ? 4 : 6) + ev.p1[player];
 }
+/* Precomputes ordinary small-board f1 values for both players. */
 static void initScoringCache(void) {
     for(int grid=0;grid<POSS_BOARDS;grid++)
         for(int player=0;player<2;player++) f1_cache[grid][player]=f1_raw(grid,0,player);
 }
+/* Returns cached ordinary-grid strength or evaluates a closed-grid context. */
 static int f1(u16 grid, u16 closed, int player) {
     return closed ? f1_raw(grid,closed,player) : f1_cache[grid][player];
 }
@@ -329,11 +312,11 @@ static int f2(u16 grid, u16 closed, int cellid, int player) {
     return relevance;
 }
 
+/* Scores a non-terminal position without searching beyond the current leaf. */
 Score scoreBoard(Board9 board, u16 last_cell, u16 last_bit) {
     (void)last_cell; (void)last_bit;
     ASSERT(board.winner == -1,"Scoring a won board");
     evaluation_calls++;
-    if(fc(board.overall,0)!=fc(board.overall,1)) count_differential_calls++;
     int strength[2];
     for(int player=0;player<2;player++) {
         int main_strength = f1(board.overall,board.overall_free,player);
@@ -349,6 +332,7 @@ Score scoreBoard(Board9 board, u16 last_cell, u16 last_bit) {
     return (Score){strength[0],strength[1]};
 }
 
+/* Evaluates a bounded minimax subtree and propagates terminal or timeout values. */
 Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, int timed) {
     if (timed && searchExpired()) return (Score){TIMEOUT_SCORE,TIMEOUT_SCORE};
     set9CB(&board, cell, bit, player);
@@ -401,6 +385,7 @@ typedef struct RootMoves_s {
     int count;
 } RootMoves;
 
+/* Iteratively deepens all viable root moves until the per-turn deadline. */
 Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
     RootMoves roots = {0};
     resetMoveIt(valid_moves);
@@ -443,19 +428,13 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
                 time_expired = 1;
                 break;
             }
-#ifdef DEBUG
-            debug_root_evaluations++;
-            if (target_plies > debug_deepest_plies)
-                debug_deepest_plies = target_plies;
-#endif
+            INSTRUMENT_ROOT_EVALUATED(target_plies);
 
             if (score.p0 == TERMINAL_SCORE && score.p1 == 0) {
                 root->proof = RootForcedWin;
                 root->score = TERMINAL_SCORE;
                 root->evaluated_plies = target_plies;
-#ifdef DEBUG
-                debug_selected_score = TERMINAL_SCORE;
-#endif
+                INSTRUMENT_SELECTED(TERMINAL_SCORE);
                 return root->move;
             }
 
@@ -487,12 +466,11 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
     }
     if (best_moves.count == 0)
         return roots.moves[rand() % roots.count].move;
-#ifdef DEBUG
-    debug_selected_score = best_score;
-#endif
+    INSTRUMENT_SELECTED(best_score);
     return best_moves.moves[rand() % best_moves.count];
 }
 
+/* Tests whether an internal coordinate is present in the arena-provided moves. */
 static int isLegalMove(int x, int y, Moves2 *moves)
 {
     if (x < 0 || x > 8 || y < 0 || y > 8) return 0;
@@ -502,6 +480,7 @@ static int isLegalMove(int x, int y, Moves2 *moves)
     return !!(moves->mask[cell] & (1u << bit));
 }
 
+/* Applies the opponent move, chooses our legal reply, then updates the board. */
 Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
 {
     if (last_move.x != -1) {
@@ -509,16 +488,9 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     }
 
     evaluation_calls = 0;
-    count_differential_calls = 0;
+    turn_cache_hits = 0;
     search_nodes = 0;
-#ifdef DEBUG
-    debug_cache_lookups = 0;
-    debug_cache_hits = 0;
-    debug_root_evaluations = 0;
-    debug_deepest_plies = 0;
-    debug_selected_score = 0;
-    debug_search = "shallow";
-#endif
+    INSTRUMENT_RESET();
 
     spaces_left = calcPlayable(board);
     search_deadline = move_budget;
@@ -533,24 +505,28 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     int try_exact_search = primary_exact_trigger || narrow_exact_trigger;
 
     if (try_exact_search) {
-#ifdef DEBUG
-        debug_search = "exact";
-#endif
+        INSTRUMENT_MODE("exact");
         double elapsed = getElaspedTime();
         search_deadline = elapsed + (move_budget - elapsed) * 0.5;
+        uint64_t timed_start = get_gtod_clock_time();
         my_move = evaluateMovesMM(board, valid_moves);
+        game_search_us += get_gtod_clock_time() - timed_start;
 
         search_deadline = move_budget;
         if (my_move.x == 0xFF) {
-            if (getenv("CG_LOCAL_HELLO")) printf("@DFS_FAILED\t%d\t%u\t%s\n",spaces_left,valid_moves->count,primary_exact_trigger?"primary":"narrow");
-#ifdef DEBUG
-            debug_search = "exact-fallback";
-#endif
+            INSTRUMENT_MODE("exact-fallback");
+            timed_start = get_gtod_clock_time();
             my_move = evaluateMovesShallowTimed(board, valid_moves);
+            game_search_us += get_gtod_clock_time() - timed_start;
         }
     } else {
+        uint64_t timed_start = get_gtod_clock_time();
         my_move = evaluateMovesShallowTimed(board, valid_moves);
+        game_search_us += get_gtod_clock_time() - timed_start;
     }
+
+    game_positions += evaluation_calls;
+    game_cache_hits += turn_cache_hits;
 
     if (!isLegalMove(my_move.x, my_move.y, valid_moves)) {
         error("Selected illegal move\n");
@@ -560,9 +536,14 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     return my_move;
 }
 
+/* Either reports the fixed build identity or runs the CodinGame game loop. */
 int main(int argc,char* argv[])
 {
-    // Init
+    if (argc == 2 && strcmp(argv[1], "--HELLO") == 0) {
+        puts(HELLO_TEXT INSTRUMENT_HELLO_SUFFIX);
+        return 0;
+    }
+    if (argc != 1) error("Only --HELLO is supported\n");
 
 #ifdef CG_GAME
     fprintf(stderr, "Running in CodinGame\n"); 
@@ -576,75 +557,10 @@ int main(int argc,char* argv[])
     p0_board.winner = -1;
     map = createHM(128000,512000);
 
-    if (argc > 1) {
-
-        int arg = 1;
-
-        while (arg < argc) {
-            char* arg_str = argv[arg];
-            arg++;
-            if (strncmp(arg_str,"--exact-primary=",16)==0 || strncmp(arg_str,"--exact-narrow=",15)==0) {
-                int primary = !strncmp(arg_str,"--exact-primary=",16);
-                const char *value = arg_str + (primary ? 16 : 15);
-                char *end; long parsed=strtol(value,&end,10);
-                if(end==value || *end || parsed<0 || parsed>81)
-                    error("Invalid exact threshold: %s\n",arg_str);
-                if(primary) exact_primary_spaces=(int)parsed; else exact_narrow_spaces=(int)parsed;
-                continue;
-            }
-            if (strncmp(arg_str,"--uscale=",9)==0) {
-                char *end;
-                long parsed=strtol(arg_str+9,&end,10);
-                if(end==arg_str+9 || *end || parsed<0 || parsed>100)
-                    error("Invalid uscale (expected integer 0..100): %s\n",arg_str);
-                uscale=(int)parsed;
-                continue;
-            }
-            if (strncmp(arg_str,"--count-scale=",14)==0) {
-                char *end;
-                double parsed=strtod(arg_str+14,&end);
-                if(end==arg_str+14 || *end || !(parsed>=0 && parsed<=10))
-                    error("Invalid count scale (expected 0..10): %s\n",arg_str);
-                count_scale=parsed;
-                continue;
-            }
-            if (strncmp(arg_str,"--score-mode=",13)==0) {
-                const char *value=arg_str+13;
-                if(strcmp(value,"difference")==0) score_mode=ScoreDifference;
-                else if(strcmp(value,"ratio")==0) score_mode=ScoreRatio;
-                else error("Invalid score mode (expected difference or ratio): %s\n",arg_str);
-                continue;
-            }
-#ifdef DEBUG
-            if (strncmp(arg_str,"--debug-file=",13)==0) {
-                debug_file = arg_str+13;
-                if (!*debug_file) error("Empty debug file path\n");
-                continue;
-            }
-#endif
-            error("Unknown bot argument: %s\n",arg_str);
-        }
-
-    }
-    
     const char *seed_text = getenv("CG_SEED");
     unsigned seed = seed_text ? (unsigned)strtoul(seed_text,NULL,10) :
         (unsigned)(get_gtod_clock_time() ^ (uint64_t)getpid());
     srand(seed);
-#ifndef BOT_BUILD_ID
-#define BOT_BUILD_ID "unversioned"
-#endif
-    if (getenv("CG_LOCAL_HELLO")) {
-#ifdef DEBUG
-        const char *version = score_mode == ScoreRatio ? "MM-002-RMD" : "MM-002-DMD";
-        const char *debug_metadata = "debug=1; ";
-#else
-        const char *version = score_mode == ScoreRatio ? "MM-002-RM" : "MM-002-DM";
-        const char *debug_metadata = "";
-#endif
-        printf("@BOT\t%s\tbuild=%s; %sopening=minimax-from-start; exact-primary=%d; exact-narrow=%d; evaluator=f1-f2-fc; score-mode=%s; shallow-plies=4-until-timeout; partial-depth=merge; relative-scale=%d; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=%d; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=%.6g; one-board-count-term=%d\n",version,BOT_BUILD_ID,debug_metadata,exact_primary_spaces,exact_narrow_spaces,score_mode==ScoreRatio?"ratio":"difference",RELATIVE_SCORE_SCALE,uscale,count_scale,(int)(20*count_scale+0.5));
-        fflush(stdout);
-    }
     int turn = 0;
     // game loop
     while (1) {
@@ -655,7 +571,7 @@ int main(int argc,char* argv[])
         if (i == EOF) break;
         if (i < 2) error("Failed to read last move\n");
         
-        if (last_move.x == -2) exit(0);  // Internal not for codinGame 
+        if (last_move.x == -2) break;  // Internal local-rig shutdown.
         if (!((last_move.x == -1 && last_move.y == -1) || (last_move.x>=0 && last_move.x<=8 && last_move.y>=0 && last_move.y<=8))) error("Invalid opponent move\n");
         start_time = get_gtod_clock_time();
         int current_turn = ++turn;
@@ -675,11 +591,14 @@ int main(int argc,char* argv[])
         if (valid_moves.count != valid_action_count) error("Duplicate legal actions\n");
         
         Pos my_move = getMove(&p0_board, last_move, &valid_moves);
-#ifdef DEBUG
-        writeDebugTurn(current_turn,(int)(move_budget*1000+0.5),valid_action_count,my_move);
-#endif
-        if(getenv("CG_LOCAL_HELLO")) printf("@USE\t%lu\t%lu\n",evaluation_calls,count_differential_calls);
+        INSTRUMENT_WRITE(current_turn, (int)(move_budget * 1000 + 0.5),
+            valid_action_count, my_move, evaluation_calls);
         printf("%d %d\n", my_move.y, my_move.x);
+        fflush(stdout);
+    }
+    if (getenv("CG_LOCAL_STATS")) {
+        printf("@GAME_STATS %llu %llu %llu\n",
+            game_search_us, game_positions, game_cache_hits);
         fflush(stdout);
     }
     destroyHM(map);    

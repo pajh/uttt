@@ -13,6 +13,8 @@ gmon.out
 /heat-scores.csv
 /heatmap.html
 /debug-game/
+/reports/
+/work/
 
 # Raw benchmark runs (GitHub Actions uploads these as artifacts)
 /run-*/
@@ -20,3 +22,5 @@ gmon.out
 /starting-moves/
 /starting-classes/
 /artifacts/
+/latest-summary*.csv
+/latest-games*.csv

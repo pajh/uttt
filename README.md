@@ -62,10 +62,21 @@ See REVIEW.md for the original inventory and code review. Its initial build and 
 Run four local batches with one configuration:
 
 ```sh
-./multi-rig.sh "./bin/gamerig -G25 --p0 './bin/ai_search_start --uscale=5 --count-scale=0 --exact-primary=17 --exact-narrow=19' --p1 './bin/orig' --quiet-bots" 20261001
+fish scripts/multi-rig.fish
 ```
 
-This writes one `run-*` directory directly below the repository. `summary.csv` contains verified bot identities, four worker rows and a combined total.
+The final report is always `reports/latest-analysis.html`. Earlier reports are
+numbered, such as `reports/latest-analysis.1.html`. CSV data and logs for the
+current run live in `work/latest/`; older runs are numbered in `work/latest.N/`.
+To rebuild a report without playing games, use `fish scripts/resummarize.fish` or
+pass a saved run directory. See [`scripts/README.md`](scripts/README.md).
+
+For four live coloured worker lines on a local terminal, run
+`fish scripts/multi-rig.fish --interactive`. The top of `scripts/multi-rig.fish` holds the two
+bot commands, worker count and games per worker. GitHub uses the same fish
+script in plain-output mode and sets its game count through the workflow input.
+For the guarded 1,000-game GitHub launch, status check, and download commands,
+see [`scripts/README.md`](scripts/README.md#standard-1000-game-github-run).
 
 ## Starting-move experiments
 

@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Combine four rig game tables; player 0 is the challenger."""
+"""Combine rig game tables; player 0 is the challenger."""
 import csv
 import sys
 from pathlib import Path
 
 folder = Path(sys.argv[1])
+seeds_path = folder / 'seeds.csv'
+if not seeds_path.exists():
+    sys.exit(f'Missing worker list: {seeds_path}')
+seed_rows = list(csv.reader(seeds_path.open()))
+if seed_rows and seed_rows[0] == ['worker', 'seed']:
+    seed_rows.pop(0)
+worker_numbers = [int(row[0]) for row in seed_rows]
+if not worker_numbers or worker_numbers != list(range(1, len(worker_numbers) + 1)):
+    sys.exit(f'Invalid worker list in {seeds_path}')
 combined = []
 summary = []
-for worker in range(1, 5):
+for worker in worker_numbers:
     path = folder / f'worker-{worker}-games.csv'
     rows = list(csv.DictReader(path.open())) if path.exists() else []
     for row in rows:
@@ -26,30 +35,43 @@ for row in summary:
         row[f'p{player}_dfs_failed'] = sum(int(r.get(f'p{player}_dfs_failed',0)) for r in rows)
         row[f'p{player}_dfs_failed_primary'] = sum(int(r.get(f'p{player}_dfs_failed_primary',0)) for r in rows)
         row[f'p{player}_dfs_failed_narrow'] = sum(int(r.get(f'p{player}_dfs_failed_narrow',0)) for r in rows)
+        reported = [r for r in rows if r.get(f'p{player}_stats_present') == '1']
+        row[f'p{player}_stats_games'] = len(reported)
+        for field in ('search_us', 'positions_scored', 'cache_hits'):
+            row[f'p{player}_{field}'] = sum(int(r[f'p{player}_{field}']) for r in reported)
+        search_us = row[f'p{player}_search_us']
+        row[f'p{player}_positions_per_second'] = (
+            round(row[f'p{player}_positions_scored'] * 1000000 / search_us)
+            if search_us else '')
 identities = []
-for worker in range(1, 5):
+for worker in worker_numbers:
     path = folder / f'worker-{worker}-identity.tsv'
     records = {}
     if path.exists():
         for line in path.read_text().splitlines():
-            player, bot_id, hello = line.split('\t', 2)
-            records[player] = (bot_id, hello)
+            fields = line.split('\t', 2)
+            if len(fields) == 2:
+                player, hello = fields
+                records[player] = (hello, hello)
+            elif len(fields) == 3:
+                player, bot_id, hello = fields
+                records[player] = (bot_id, hello)
+            else:
+                sys.exit(f'Invalid identity record in {path}: {line!r}')
     if set(records) != {'0', '1'}:
         sys.exit(f'Missing verified identities for worker {worker}')
     identities.append(records)
 if any(record != identities[0] for record in identities):
     sys.exit('BOT IDENTITY/HELLO MISMATCH across workers')
-for row in summary:
-    usage_path = folder / f"worker-{row['worker']}-identity.tsv.usage.csv"
-    usage = list(csv.DictReader(usage_path.open())) if usage_path.exists() else []
-    row['p0_evaluations'] = sum(int(r['evaluations']) for r in usage if r['player']=='0')
-    row['p0_count_differential_evaluations'] = sum(int(r['count_differential_evaluations']) for r in usage if r['player']=='0')
 total = {'worker': 'TOTAL'}
-for field in ('p0_evaluations','p0_count_differential_evaluations'):
-    total[field] = sum(r[field] for r in summary)
-
 for field in summary[0]:
-    if field!='worker': total[field]=sum(r[field] for r in summary)
+    if field != 'worker' and not field.endswith('_positions_per_second'):
+        total[field] = sum(r[field] for r in summary)
+for player in ('0', '1'):
+    search_us = total[f'p{player}_search_us']
+    total[f'p{player}_positions_per_second'] = (
+        round(total[f'p{player}_positions_scored'] * 1000000 / search_us)
+        if search_us else '')
 summary.append(total)
 for row in summary:
     row['match_score'] = ((row['wins'] + .5 * row['draws']) / row['games']) if row['games'] else ''
@@ -67,8 +89,16 @@ if combined:
         writer = csv.DictWriter(out, fieldnames=list(combined[0]))
         writer.writeheader()
         writer.writerows(combined)
-print(f"TOTAL: {total['wins']} wins / {total['losses']} losses / {total['draws']} draws; "
-      f"{total['games']} games; {total['technical_failures']} technical failures")
+win_3 = sum(r['winner'] == '0' and r.get('win_type') == '3iar' for r in combined)
+win_c = sum(r['winner'] == '0' and r.get('win_type') == 'count' for r in combined)
+win_f = sum(r['winner'] == '0' and r.get('reason') != 'played' for r in combined)
+loss_3 = sum(r['winner'] == '1' and r.get('win_type') == '3iar' for r in combined)
+loss_c = sum(r['winner'] == '1' and r.get('win_type') == 'count' for r in combined)
+loss_f = sum(r['winner'] == '1' and r.get('reason') != 'played' for r in combined)
+print(f"Played: {total['games']}  Wins: {total['wins']} "
+      f"(3:{win_3}, C:{win_c}, F:{win_f})  "
+      f"Losses: {total['losses']} (3:{loss_3}, C:{loss_c}, F:{loss_f})  "
+      f"Draws: {total['draws']}")
 print(f"Summary: {folder / 'summary.csv'}")
 if any(not r['games'] for r in summary[:-1]):
     sys.exit('Missing game results from one or more workers; inspect status.csv and logs.')

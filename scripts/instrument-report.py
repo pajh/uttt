@@ -5,11 +5,13 @@ import math
 import sys
 from pathlib import Path
 
-source = Path(sys.argv[1] if len(sys.argv) > 1 else "debug-game/turns.csv")
-target = Path(sys.argv[2] if len(sys.argv) > 2 else "debug-game/report.html")
+source = Path(sys.argv[1] if len(sys.argv) > 1 else "instrument-turns.csv")
+target = Path(sys.argv[2] if len(sys.argv) > 2 else "instrument/report.html")
+run_at = sys.argv[3] if len(sys.argv) > 3 else "unknown local time"
+hello = sys.argv[4] if len(sys.argv) > 4 else "unknown build"
 rows = list(csv.DictReader(source.open()))
 if not rows:
-    raise SystemExit(f"No debug turns in {source}")
+    raise SystemExit(f"No instrument turns in {source}")
 
 
 def blocks(milliseconds):
@@ -53,7 +55,7 @@ for row in rows:
     table_rows.append(f"<tr>{cells}</tr>")
 
 document = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>MM-002-RMD one-game report</title>
+<html><head><meta charset="utf-8"><title>Ultimate Tic-Tac-Toe instrument report</title>
 <style>
 body {{ font: 14px system-ui, sans-serif; margin: 24px; color: #17202a; }}
 h1,h2 {{ margin-bottom: .4rem; }} .note {{ color:#566573; }}
@@ -69,7 +71,9 @@ h1,h2 {{ margin-bottom: .4rem; }} .note {{ color:#566573; }}
 table {{ border-collapse:collapse; margin-top:14px; }} th,td {{ border:1px solid #ccd1d1; padding:5px 8px; text-align:right; }}
 th {{ background:#eaf2f8; position:sticky; top:0; }} td:last-child,th:last-child {{ text-align:left; }}
 </style></head><body>
-<h1>MM-002-RMD: one-game search report</h1>
+<h1>Ultimate Tic-Tac-Toe: one-game instrument report</h1>
+<p><strong>Run:</strong> {html.escape(run_at)}<br>
+<strong>Bot:</strong> {html.escape(hello)}</p>
 <p class="note">Each coloured block represents 10 ms, rounded up. The bot targets 900 ms on its opening move and 90 ms thereafter, leaving arena safety margin.</p>
 <p class="note">Positional scores use 10000 × (ours − theirs) / (ours + theirs + 2): 0 is neutral, 1000 is a 10% normalized advantage, and ±60000 is a proved terminal result.</p>
 <h2>Opening move — {float(opening['elapsed_ms']):.3f} ms</h2>

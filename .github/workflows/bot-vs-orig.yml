@@ -1,5 +1,5 @@
 name: Bot versus orig
-run-name: MM-002-RM versus orig — ${{ inputs.games }} alternating-start games
+run-name: ai_minimax versus orig — ${{ inputs.games }} games — ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -12,6 +12,10 @@ on:
         description: First worker seed
         required: true
         default: "20261001"
+      request_id:
+        description: Unique ID for matching this launch to its result
+        required: false
+        default: "manual"
 
 jobs:
   play:
@@ -20,27 +24,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build identified bots and rig
-        run: make bin/gamerig bin/orig bin/ai_search_start
+      - name: Ensure fish is available
+        run: |
+          if ! command -v fish >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y fish
+          fi
+          fish --version
 
       - name: Run four alternating-start workers
         env:
           TOTAL_GAMES: ${{ inputs.games }}
-          BASE_SEED: ${{ inputs.base_seed }}
+          RIG_BASE_SEED: ${{ inputs.base_seed }}
         run: |
           test $((TOTAL_GAMES % 4)) -eq 0
-          games_per_worker=$((TOTAL_GAMES / 4))
-          command="./bin/gamerig -G${games_per_worker} --p0 './bin/ai_search_start --uscale=5 --count-scale=0 --exact-primary=17 --exact-narrow=19 --score-mode=ratio' --p1 ./bin/orig --quiet-bots"
-          ./multi-rig.sh "$command" "$BASE_SEED" results
+          export RIG_GAMES_PER_WORKER=$((TOTAL_GAMES / 4))
+          fish scripts/multi-rig.fish
 
       - name: Show summary
         if: always()
-        run: cat results/summary.csv || true
+        run: cat work/latest/summary.csv || true
 
       - name: Upload result tables and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bot-vs-orig-${{ github.run_id }}
-          path: results/
+          path: |
+            reports/
+            work/latest/
           retention-days: 30

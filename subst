@@ -8,6 +8,9 @@ do
     elif [[ "$line" =~ ^[[:space:]]*#include[[:space:]]+\"hashmap.h\"[[:space:]]*$ ]]
     then
 	cat ./src/engine/hashmap.h
+    elif [[ "$line" =~ ^[[:space:]]*#include[[:space:]]+\"instrument.h\"[[:space:]]*$ ]]
+    then
+	cat ./src/bots/instrument.h
     else
 	echo "$line"
     fi

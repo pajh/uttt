@@ -64,7 +64,7 @@ def main():
                         help="concurrent openings (default: 4)")
     parser.add_argument("--seed", type=int, default=20261001,
                         help="base seed reused for every opening")
-    parser.add_argument("--p0", default="./bin/ai_search_start --uscale=5 --count-scale=0 --exact-primary=17 --exact-narrow=19")
+    parser.add_argument("--p0", default="./bin/ai_minimax")
     parser.add_argument("--p1", default="./bin/orig")
     parser.add_argument("--output", default="starting-moves")
     args = parser.parse_args()

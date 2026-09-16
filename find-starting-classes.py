@@ -48,7 +48,7 @@ def main():
                         help="games per policy (default: 200; 3,200 total including baseline)")
     parser.add_argument("-j", "--jobs", type=int, default=4)
     parser.add_argument("--seed", type=int, default=20261001)
-    parser.add_argument("--p0", default="./bin/ai_search_start --uscale=5 --count-scale=0 --exact-primary=17 --exact-narrow=19")
+    parser.add_argument("--p0", default="./bin/ai_minimax")
     parser.add_argument("--p1", default="./bin/orig")
     parser.add_argument("--output", default="starting-classes")
     args = parser.parse_args()

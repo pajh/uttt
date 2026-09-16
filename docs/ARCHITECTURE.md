@@ -16,10 +16,10 @@ bot, random baseline and referee are supported build targets.
 | `tests/` | Current board/search regression suite | Supported |
 | `docs/` | Project documentation | Source of process and architecture guidance |
 
-Generated executables live in `bin/`.  Match outputs belong in ignored result
-directories such as `results/`, `run-*`, `debug-game/` and
-`starting-classes/`; do not commit them unless a result is deliberately being
-published.
+Generated executables live in `bin/`. Generated readable reports belong in
+ignored `reports/`; their logs, game tables and supporting data belong in
+ignored `work/`. Do not commit either directory unless a result is deliberately
+being published.
 
 ## Runtime flow
 

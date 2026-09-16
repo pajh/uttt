@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build identified bots and rig
-        run: make bin/gamerig bin/orig bin/ai_search_start
+        run: make bin/gamerig bin/orig bin/ai_minimax
 
       - name: Test 15 symmetries and normal baseline on four workers
         env:
