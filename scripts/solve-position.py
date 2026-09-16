@@ -152,6 +152,20 @@ def f2(x_owned, o_owned, closed, small, player):
     return relevance
 
 
+def live_master_winning_cells(boards, x_owned, o_owned, closed, player):
+    """Distinct unfinished, still-capturable U cells completing a master line."""
+    own = x_owned if player == 0 else o_owned
+    unavailable = x_owned | o_owned | closed
+    cells = 0
+    for line in LINES:
+        if (line & own).bit_count() == 2 and (line & unavailable).bit_count() == 2:
+            cells |= line & ~unavailable
+    return sum(bool(cells & (1 << small)) and
+               any(not line & ((boards[small] >> 9) if player == 0 else boards[small] & FULL)
+                   for line in LINES)
+               for small in range(9))
+
+
 def evaluate_current(state, uscale=5, count_scale=1.0):
     """Independent mirror of ai_minimax.c's nonterminal leaf scoreBoard()."""
     boards, x_owned, o_owned, closed, _, _, winner = state
@@ -174,6 +188,26 @@ def evaluate_current(state, uscale=5, count_scale=1.0):
     mine, theirs = details[0][0], details[1][0]
     relative = int(10000 * (mine - theirs) / (mine + theirs + 2))
     return relative, details
+
+
+def evaluate_experiment(state, ownership=20, threat=80, uscale=5):
+    """MM-004 proposal: additive ownership and distinct live master threats."""
+    boards, x_owned, o_owned, closed, _, _, winner = state
+    if winner != -1:
+        raise ValueError("Leaf evaluator is not called on terminal positions")
+    strengths = []
+    for player in (0, 1):
+        own = x_owned if player == 0 else o_owned
+        master = f1(x_owned, o_owned, closed, player) * uscale
+        secured = own.bit_count() * ownership
+        threats = live_master_winning_cells(boards, x_owned, o_owned, closed, player) * threat
+        local = sum(f1(board & FULL, board >> 9, 0, player)
+                    * f2(x_owned, o_owned, closed, small, player)
+                    for small, board in enumerate(boards) if not closed & (1 << small))
+        strengths.append((master + secured + threats + local,
+                          master, secured, threats, local))
+    mine, theirs = strengths[0][0], strengths[1][0]
+    return int(10000 * (mine - theirs) / (mine + theirs + 2)), strengths
 
 
 class Deadline(Exception):
@@ -250,6 +284,10 @@ def main():
                         help="Find the earliest ply by which a proven win can be forced")
     parser.add_argument("--explain-eval", action="store_true",
                         help="Mirror and decompose the current one-ply heuristic")
+    parser.add_argument("--experiment-eval", action="store_true",
+                        help="Compare the proposed MM-004 one-ply heuristic")
+    parser.add_argument("--ownership-bonus", type=int, default=20)
+    parser.add_argument("--threat-bonus", type=int, default=80)
     parser.add_argument("--uscale", type=int, default=5)
     parser.add_argument("--count-scale", type=float, default=1.0)
     args = parser.parse_args()
@@ -285,6 +323,13 @@ def main():
                 print(f"  {describe(move)} leaf relative={relative:+d}", flush=True)
             else:
                 print(f"  {describe(move)} is immediately terminal", flush=True)
+        if args.experiment_eval and play(state, move)[6] == -1:
+            relative, details = evaluate_experiment(
+                play(state, move), args.ownership_bonus, args.threat_bonus, args.uscale)
+            for player, (total, master, owned, threats, local) in enumerate(details):
+                print(f"  {describe(move)} MM-004 p{player}: total={total}, master={master}, "
+                      f"owned={owned}, threats={threats}, local={local}", flush=True)
+            print(f"  {describe(move)} MM-004 relative={relative:+d}", flush=True)
         try:
             value, line = solver.solve(play(state, move))
             value = -value

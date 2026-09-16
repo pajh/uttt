@@ -17,7 +17,7 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "MM-003-R1MM" /* M = minimax, 003 = experiment counter, R = ratio score. */
+#define HELLO_TEXT "MM-004-R1MM" /* M = minimax, 004 = experiment counter, R = ratio score. */
 
 /* Opening policy: two letters, the outer grid class then the inner cell
  * class.  Each letter is one of M, C or D under the cell numbering
@@ -33,6 +33,7 @@
 
 #define LEVER_USCALE 5
 #define LEVER_COUNT_SCALE 1.0
+#define LEVER_MASTER_THREAT 80
 
 #define MAX_TIME 0.0900
 #define TERMINAL_SCORE 60000
@@ -210,6 +211,30 @@ static int f2(u16 grid, u16 closed, int cellid, int player) {
     return relevance;
 }
 
+/* Counts distinct open master cells that complete a line and whose local
+   board still has a line free of opponent marks. Routing and future defence
+   are left to search; this is only a leaf-level possibility, not a proof. */
+static int liveMasterWinningCells(Board9 board, int player) {
+    Board3 owners=B3(board.overall);
+    u16 own=owners.p[player];
+    u16 unavailable=board.overall_free;
+    u16 threats=0;
+    for(int i=0;i<8;i++) {
+        u16 line=scoring_lines[i];
+        if(POPCNT(line & own)==2 && POPCNT(line & unavailable)==2)
+            threats |= line & ~unavailable;
+    }
+    int count=0;
+    for(int i=0;i<9;i++) if(threats & (1u<<i)) {
+        u16 opponent=B3(board.cell[i]).p[1-player];
+        for(int j=0;j<8;j++) if(!(scoring_lines[j] & opponent)) {
+            count++;
+            break;
+        }
+    }
+    return count;
+}
+
 /* Scores a non-terminal position without searching beyond the current leaf. */
 Score scoreBoard(Board9 board, u16 last_cell, u16 last_bit) {
     (void)last_cell; (void)last_bit;
@@ -218,10 +243,11 @@ Score scoreBoard(Board9 board, u16 last_cell, u16 last_bit) {
     int strength[2];
     for(int player=0;player<2;player++) {
         int main_strength = f1(board.overall,board.overall_free,player);
-        /* Wild-card experiment: ownership matters only when the top-grid score is zero. */
+        /* MM-004: secured boards always count; a live master-winning cell
+           must outweigh the local potential discarded when a board closes. */
         strength[player] = main_strength*uscale;
-        if (main_strength == 0)
-            strength[player] += (int)(fc(board.overall,player)*COUNT_UNIT*count_scale+0.5);
+        strength[player] += (int)(fc(board.overall,player)*COUNT_UNIT*count_scale+0.5);
+        strength[player] += LEVER_MASTER_THREAT*liveMasterWinningCells(board,player);
         for(int i=0;i<9;i++) if(!(board.overall_free & (1u<<i)))
             strength[player] += f1(board.cell[i],0,player)
                 * f2(board.overall,board.overall_free,i,player);

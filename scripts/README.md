@@ -100,6 +100,9 @@ python3 -B scripts/solve-position.py --moves-csv work/instrument/all-moves.csv \
 win/draw/loss against all replies; `--fastest-win` finds the earliest guaranteed
 winning horizon, including an opponent trying to delay. `--explain-eval` mirrors
 the current bot's one-ply score to expose why its preference differs. The
+proposed MM-004 evaluator can be compared on the same moves with
+`--experiment-eval` (optional `--ownership-bonus` and `--threat-bonus`);
+this changes only the Python workbench, not the bot. The
 default proof budget is 60 seconds in total (`--seconds` changes it), so an
 unfinished result is explicitly marked unresolved. A custom position can be
 loaded with `--position FILE` instead of the move CSV; see the script's opening

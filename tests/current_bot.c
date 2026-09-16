@@ -171,14 +171,19 @@ int main(void) {
     original=scoreBoard(b,0,0);
     assert(original.p0==4*local.p2[0]+local.p1[0] && original.p1==0);
     count_scale=1;
-    /* Ownership gate follows f1(U,p), independently for each player. */
+    /* Secured ownership is counted even when master line potential exists. */
     b=(Board9){.winner=-1};handleCellWin(&b,0,0,0);
     assert(f1(b.overall,b.overall_free,0)>0);
     count_scale=0;
     Score gate_off=scoreBoard(b,0,0);
     count_scale=0.5;
     Score gate_on=scoreBoard(b,0,0);
-    assert(gate_on.p0==gate_off.p0);
+    assert(gate_on.p0==gate_off.p0+10);
+    /* Two distinct live finishes are counted once each, not once per line. */
+    b=(Board9){.winner=-1};
+    handleCellWin(&b,1,0,0);handleCellWin(&b,1,1,0);handleCellWin(&b,0,2,0);
+    assert(b.winner==-1 && liveMasterWinningCells(b,0)==2);
+    assert(liveMasterWinningCells(b,1)==0);
     count_scale=1;
     destroyHM(map);
     puts("All board states, move conversion, endings, cache identity, deadline fallback and terminal search passed.");
