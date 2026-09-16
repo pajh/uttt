@@ -1,5 +1,5 @@
 #define main bot_main
-#include "ai_minimax.c"
+#include "../../src/bots/ai_minimax.c"
 #undef main
 /* Replay rig moves; score legal alternatives immediately after each candidate. */
 int main(int argc,char **argv) {

@@ -1,0 +1,2 @@
+game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow
+0,20261001,4,4,4,4,0,0,-1,played,41,18c753b02ca55e1d,3iar,0,0,0,0,0,0

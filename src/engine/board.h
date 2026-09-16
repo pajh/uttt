@@ -1,3 +1,15 @@
+/*
+ * Ultimate Tic-Tac-Toe board engine.
+ *
+ * This is intentionally a header-only, single-translation-unit component:
+ * every executable that uses it includes its definitions directly.  Do not
+ * include it in more than one source file in the same executable.
+ *
+ * Coordinates use x = column and y = row.  A Board3 is encoded in base 3;
+ * cache[code] decodes a small board into two 9-bit player masks.  Board9
+ * stores the nine encoded small boards plus the master board and its closed
+ * squares.  A closed square can be won by either player or a drawn board.
+ */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +59,7 @@ typedef struct Moves_s
 
 typedef struct Moves2_s
 {
+    /* One legal-cell bitmask per small board; fields after count are iterator state. */
     uint16_t mask[9];
     uint16_t count;
     uint16_t it_current;
@@ -77,6 +90,7 @@ int moveNext(Moves2* moves, Pos* p) {
         //    fprintf(stderr,"[m2 is wrong %u->%u]",m,m2);
         // }
 
+        /* Convert a small-board index and its least-significant cell bit to 9x9 coordinates. */
         int real_pos = moves->it_current_pos -1;
         p->x = ( (real_pos % 3) * 3) + m2 % 3;
         p->y = ( (real_pos / 3) * 3) + m2 / 3;

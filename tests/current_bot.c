@@ -1,5 +1,5 @@
 #define main bot_main
-#include "../ai_minimax.c"
+#include "../src/bots/ai_minimax.c"
 #undef main
 #include <assert.h>
 

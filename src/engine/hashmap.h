@@ -1,11 +1,14 @@
-/* ---------------------
-   hashmap.h
-   --------------------- */
+/*
+ * Fixed-capacity transposition cache.  It owns preallocated bucket and entry
+ * arrays so search does not allocate per node.  Like board.h, it defines
+ * functions and therefore belongs in exactly one translation unit.
+ */
    
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* searchKey() in ai_minimax.c owns this byte-level key format. */
 #define KEY_SIZE 26
 typedef uint32_t u32;
 

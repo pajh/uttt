@@ -1,0 +1,2 @@
+0	MM-002-RMD	build=27db7f6bf57708b1; debug=1; opening=minimax-from-start; exact-primary=0; exact-narrow=0; evaluator=f1-f2-fc; score-mode=ratio; shallow-plies=4-until-timeout; partial-depth=merge; relative-scale=10000; shallow-cache=clear-each-depth; count-gate=f1-U-zero-per-player; uscale=5; f1=winning-cells:0/4/6+one-lines; f2=base1+lines:1/2/4; count-component=20*owned; scale=0; one-board-count-term=0
+1	orig-21d1b83935be6da9	historical evaluator; scale=not-supported; rng=time/pid

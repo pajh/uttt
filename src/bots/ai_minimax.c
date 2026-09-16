@@ -1,3 +1,9 @@
+/*
+ * Current competition bot.  The turn loop maintains a Board9 from the arena
+ * protocol, then chooses through timed shallow minimax and (late-game) exact
+ * search.  board.h and hashmap.h are deliberately included as implementation
+ * headers so `subst` can make a standalone submission from this file.
+ */
 #pragma GCC optimize "O3,omit-frame-pointer,inline"
 #pragma GCC target("lzcnt,popcnt")
 
@@ -9,7 +15,6 @@
 #define TERMINAL_SCORE 60000
 #define TIMEOUT_SCORE 65535
 #define RELATIVE_SCORE_SCALE 10000
-//#define MAX_TIME 0.50
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -149,6 +154,8 @@ void sortMoves(Board9 *board, Moves *valid_moves, int player) {
 
 /* Keys encode the entire playable state, directed destination, turn and horizon.
    Explicit bytes avoid struct padding; completed entries always store exact values. */
+/* Encode every search-relevant state byte explicitly, avoiding padding and
+ * distinguishing directed-board, side-to-move and horizon variants. */
 void searchKey(Board9 *board, u16 bit, int next_player, int depth, unsigned char key[KEY_SIZE]) {
     int offset = 0;
     for (int i=0;i<9;i++) {

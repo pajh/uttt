@@ -1,5 +1,5 @@
 from pathlib import Path
-source = Path('orig.c').read_text()
+source = Path('src/legacy/orig.c').read_text()
 start = source.index('Pos evaluateMovesMM(')
 end = source.index('\n}', start) + 2
 section = source[start:end]

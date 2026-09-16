@@ -1,3 +1,8 @@
+/*
+ * Local process-based referee.  It speaks the CodinGame stdin/stdout protocol
+ * to independent bot processes, validates their moves and records CSV data.
+ * This is test infrastructure, not code submitted to CodinGame.
+ */
 #include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
