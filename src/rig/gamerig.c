@@ -33,6 +33,7 @@ unsigned rig_seed = 20260914;
 unsigned game_seed;
 Pos forced_opening = {-1, -1};
 int fixed_starting_player = -1;
+int seed_p1_from_game = 0;
 char opening_class[4] = "";
 FILE *games_csv, *moves_csv;
 int timed_out;
@@ -98,7 +99,7 @@ void saveWeights(const char* file_name, int weights[], double* win_per)
 }
 
 
-pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_pipe) {
+pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_pipe, int append_seed) {
     int in[2], out[2];
     if (pipe(in) < 0 || pipe(out) < 0) error("pipe");
     for (int i=0;i<2;i++) {
@@ -112,7 +113,7 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
             _exit(126);
         close(in[0]); close(in[1]); close(out[0]); close(out[1]);
         char seed[32];
-        snprintf(seed,sizeof(seed),"%u",game_seed ^ (cmd == bot_paths[0] ? 0x12345678u : 0x87654321u));
+        snprintf(seed,sizeof(seed),"%u",game_seed);
         setenv("CG_SEED",seed,1);
         setenv("CG_LOCAL_STATS","1",1);
         if (quiet_bots) {
@@ -121,10 +122,11 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
         }
         wordexp_t words;
         if (wordexp(file,&words,WRDE_NOCMD) != 0 || !words.we_wordc) _exit(125);
-        char *args[words.we_wordc+2];
+        char *args[words.we_wordc+4];
         for(size_t i=0;i<words.we_wordc;i++) args[i]=words.we_wordv[i];
         size_t n=words.we_wordc;
         if(arg_1 && *arg_1) args[n++]=arg_1;
+        if (append_seed) { args[n++]="--seed"; args[n++]=seed; }
         args[n]=NULL;
         execvp(args[0],args);
         perror(file);
@@ -140,7 +142,7 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
 static void collectBotHello(int player) {
     int read_pipe, write_pipe;
     pid_t pid = runAndLink(bot_paths[player], bot_paths[player], "--HELLO",
-        &read_pipe, &write_pipe);
+        &read_pipe, &write_pipe, 0);
     close(write_pipe);
 
     struct pollfd ready = {read_pipe, POLLIN, 0};
@@ -291,10 +293,10 @@ int playGame(int game, int player, char* p0_arg)
     }
 
     // Player 0
-    bot_pids[0] = runAndLink(bot_paths[0], bot_paths[0], p0_arg, &read_pipe[0], &write_pipe[0] );
+    bot_pids[0] = runAndLink(bot_paths[0], bot_paths[0], p0_arg, &read_pipe[0], &write_pipe[0], 0);
 
     // Player 1
-    bot_pids[1] = runAndLink(bot_paths[1], bot_paths[1], "", &read_pipe[1], &write_pipe[1] );
+    bot_pids[1] = runAndLink(bot_paths[1], bot_paths[1], "", &read_pipe[1], &write_pipe[1], seed_p1_from_game);
 
     Board9 board = {0};
     board.winner = -1;
@@ -584,6 +586,7 @@ int main(int argc,char* argv[])
             identity_file=fopen(argv[++i],"w"); if(!identity_file) error("identity file");
         }
         else if (strcmp(argv[i], "--quiet-bots") == 0) quiet_bots = 1;
+        else if (strcmp(argv[i], "--p1-game-seed") == 0) seed_p1_from_game = 1;
         else if (strcmp(argv[i], "--seed") == 0 && i+1<argc) rig_seed = (unsigned)strtoul(argv[++i],NULL,10);
         else if (strcmp(argv[i], "--force-opening") == 0 && i+1<argc) {
             int row, col;
@@ -610,6 +613,7 @@ int main(int argc,char* argv[])
             fixed_starting_player = 0;
         }
         else if (strcmp(argv[i], "--p0-first") == 0) fixed_starting_player = 0;
+        else if (strcmp(argv[i], "--p1-first") == 0) fixed_starting_player = 1;
         else if (strcmp(argv[i], "--games-csv") == 0 && i+1<argc) {
             games_csv = fopen(argv[++i],"w"); if (!games_csv) error("games csv");
             fputs("game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow,p0_stats_present,p0_search_us,p0_positions_scored,p0_cache_hits,p1_stats_present,p1_search_us,p1_positions_scored,p1_cache_hits\n",games_csv);
@@ -620,7 +624,7 @@ int main(int argc,char* argv[])
         }
         else if (strcmp(argv[i], "--timeout-ms") == 0 && i+1<argc) response_ms = atoi(argv[++i]);
         else {
-            fprintf(stderr,"Usage: %s [-G<count>] [--p0 executable] [--p1 executable] [--p0-first] [--force-opening row,col | --opening-class MD] [--timeout-ms milliseconds] [--quiet-bots] [--seed integer] [--games-csv path] [--moves-csv path]\n",argv[0]);
+            fprintf(stderr,"Usage: %s [-G<count>] [--p0 executable] [--p1 executable] [--p0-first | --p1-first] [--p1-game-seed] [--force-opening row,col | --opening-class MD] [--timeout-ms milliseconds] [--quiet-bots] [--seed integer] [--games-csv path] [--moves-csv path]\n",argv[0]);
             return 1;
         }
     }

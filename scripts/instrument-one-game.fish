@@ -17,7 +17,7 @@ set -l hello (./bin/ai_minimax --HELLO)
 or exit $status
 
 # --HELLO is a separate preflight call.  The game process must read moves.
-fish -c "./bin/gamerig -G1 --p0 'env INSTRUMENT_FILE=$work_dir/turns.csv ./bin/ai_minimax' --p1 ./bin/orig --quiet-bots --seed 20261001 --games-csv $work_dir/game.csv --moves-csv $work_dir/all-moves.csv --identity-file $work_dir/identity.tsv" \
+fish -c "./bin/gamerig -G1 --p0 'env INSTRUMENT_FILE=$work_dir/turns.csv ./bin/ai_minimax' --p1 ./bin/orig --p1-game-seed --quiet-bots --seed 20261001 --games-csv $work_dir/game.csv --moves-csv $work_dir/all-moves.csv --identity-file $work_dir/identity.tsv" \
     > "$work_dir/game.log" 2>&1
 or begin
     echo "Instrument game failed; raw files: $work_dir" >&2

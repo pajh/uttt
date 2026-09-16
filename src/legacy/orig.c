@@ -15,6 +15,8 @@
 #include <search.h>
 
 #include <stdint.h>
+#include <errno.h>
+#include <limits.h>
 
 #define MASK_ROW 7
 #define MASK_COL 73
@@ -1520,6 +1522,8 @@ int main(int argc,char* argv[])
         ev_cache[i] = ev;
     }
 
+    unsigned explicit_seed = 0;
+    int has_explicit_seed = 0;
     if (argc > 1) {
 
         int arg = 1;
@@ -1527,6 +1531,23 @@ int main(int argc,char* argv[])
         while (arg < argc) {
             char* arg_str = argv[arg];
             arg++;
+
+            if (strcmp(arg_str, "--seed") == 0) {
+                if (arg >= argc) {
+                    fprintf(stderr, "--seed requires an unsigned integer\n");
+                    return 2;
+                }
+                char *end;
+                errno = 0;
+                unsigned long value = strtoul(argv[arg++], &end, 10);
+                if (errno || *end || value > UINT_MAX) {
+                    fprintf(stderr, "Invalid --seed value\n");
+                    return 2;
+                }
+                explicit_seed = (unsigned)value;
+                has_explicit_seed = 1;
+                continue;
+            }
 
             if (arg_str[0] == '-' && arg_str[1] == 'l') {
                 p0_log = 1;    
@@ -1560,11 +1581,12 @@ int main(int argc,char* argv[])
     printBoard(&p0_board,p, &valid_moves);
     exit(0);*/
     
-    srand(time(NULL)); // Initialization, should only be called once.   
-    //srand(12345);
-    int pid = getpid(); 
+    /* Preserve the historical default; explicit seeds replace the PID-dependent
+       warm-up with a stable one, without changing the move policy. */
+    srand(has_explicit_seed ? explicit_seed : (unsigned)time(NULL));
+    unsigned warmup = has_explicit_seed ? explicit_seed % 17 : (unsigned)getpid() % 17;
     int t = 0;
-    for (int i=0;i<pid % 17;i++) {
+    for (unsigned i=0;i<warmup;i++) {
         t += rand() % 2;
     }
     // game loop

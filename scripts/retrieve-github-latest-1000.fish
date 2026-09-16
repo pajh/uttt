@@ -19,7 +19,7 @@ if test "$fields[2]" != completed -o "$fields[3]" != success
     exit 2
 end
 if test -f work/github-latest/run-source.txt
-    if rg -F -x -q "run_id=$run_id" work/github-latest/run-source.txt
+    if grep -Fqx -- "run_id=$run_id" work/github-latest/run-source.txt
         echo "GitHub run $run_id is already at reports/github-latest.html and work/github-latest/"
         exit 0
     end
@@ -38,12 +38,12 @@ if not test -f "$incoming_report" -a -f "$incoming_data/summary.csv" -a -f "$inc
     rm -r -- "$download_dir"
     exit 1
 end
-if not rg -F -x -q "run_id=$run_id" "$incoming_data/run-source.txt"
+if not grep -Fqx -- "run_id=$run_id" "$incoming_data/run-source.txt"
     echo 'Downloaded artifact does not identify the expected GitHub run.' >&2
     rm -r -- "$download_dir"
     exit 1
 end
-set -l total_line (rg '^TOTAL,' "$incoming_data/summary.csv")
+set -l total_line (grep '^TOTAL,' "$incoming_data/summary.csv")
 set -l total_fields (string split , -- "$total_line")
 if test (count $total_fields) -lt 2 -o "$total_fields[2]" != "$expected_games"
     echo "Downloaded summary does not have the requested $expected_games games." >&2

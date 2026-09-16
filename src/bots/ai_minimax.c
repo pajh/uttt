@@ -17,12 +17,22 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "MM-003-R" /* M = minimax, 003 = experiment counter, R = ratio score. */
-#define OPENING_SEARCH_THRESHOLD 82
+#define HELLO_TEXT "MM-003-R1MM" /* M = minimax, 003 = experiment counter, R = ratio score. */
+
+/* Opening policy: two letters, the outer grid class then the inner cell
+ * class.  Each letter is one of M, C or D under the cell numbering
+ *
+ *     0 1 2        D C D
+ *     3 4 5   =>   C M C
+ *     6 7 8        D C D
+ *
+ * so M is the middle cell 4, C a cardinal cell (1, 3, 5, 7) and D a diagonal
+ * cell (0, 2, 6, 8).  "MM" is therefore the centre cell of the centre board.
+ * D and C draw a fresh random cell from their class on every call. */
+#define START_RULE "MM"
+
 #define LEVER_USCALE 5
 #define LEVER_COUNT_SCALE 1.0
-#define LEVER_EXACT_PRIMARY_SPACES 17
-#define LEVER_EXACT_NARROW_SPACES 19
 
 #define MAX_TIME 0.0900
 #define TERMINAL_SCORE 60000
@@ -75,8 +85,6 @@ static int searchCacheFind(HashMap *hm, unsigned char *key, u32 *data)
 
 // Globals
 HashMap* map;
-int spaces_left;
-uint32_t mm_score_count = 0;
 static unsigned long evaluation_calls;
 
 /* Prints a fatal diagnostic and terminates the bot. */
@@ -89,64 +97,6 @@ void error(const char *format, ...)
     fprintf(stderr, "TERMINATING\n");
 
     exit(-1);
-}
-
-/* Counts open cells in all unfinished small boards. */
-int calcPlayable(Board9* board) {
-    int free = 0;
-    for (int x=0;x<3;x++) {
-        for (int y=0;y<3;y++) {
-            if ( (board->overall_free & mask(x, y)) == 0) {
-                Board3 sb = B3( board->cell[x+y*3] ) ;
-                free += countFree(sb.p[0] | sb.p[1]);
-            }
-        }
-    }
-    return free;
-}
-
-/* Appends every move from src to dest. */
-void copyMoves(Moves* dest, Moves* src) {
-    for(int i=0;i<src->count;i++) push(dest,src->moves[i]);
-}
-
-/* Groups immediate game wins and promising small-board moves first. */
-void sortMoves(Board9 *board, Moves *valid_moves, int player) {
-
-    if (valid_moves->count <= 1) return;
-
-    Moves game_winners = {0};
-    Moves square_winners = {0};
-    Moves the_rest = {0};
-
-    Evaluation ev_orig = evalMAC2(board->overall, board->overall_free);
-    for (int i=0;i<valid_moves->count;i++) {
-        Board9 tboard = *board;
-        set9(&tboard,valid_moves->moves[i].x,valid_moves->moves[i].y, player);
-        Evaluation ev = evalMAC2(tboard.overall, tboard.overall_free);
-
-        if ( ev.p3[player] > 0) {
-            push(&game_winners,valid_moves->moves[i]);
-            continue;
-        }
-
-        if ( ( ev.p2[player] > ev_orig.p2[player]) || ( ev.p1[player] > ev_orig.p1[player]) ) {
-            push(&square_winners,valid_moves->moves[i]);
-            continue;
-        }
-        push(&the_rest, valid_moves->moves[i] ); 
-    }
-
-    int original_count = valid_moves->count;
-    valid_moves->count = 0;
-    copyMoves(valid_moves, &game_winners);
-    copyMoves(valid_moves, &square_winners);
-    copyMoves(valid_moves, &the_rest);
-
-    if (valid_moves->count != original_count) {
-        fprintf(stderr, "Valid moves size has changed now:%d orig:%d winners:%d sq:%d rest:%d\n", valid_moves->count, original_count, game_winners.count, square_winners.count, the_rest.count);
-        exit(0);
-    }
 }
 
 /* Encodes state, destination, player and horizon into a padding-free cache key. */
@@ -196,58 +146,6 @@ static int countProof(Board9 board, unsigned possible) {
     return -1;
 }
 
-/* Solves a late-game move exactly, returning p0 win, draw, p1 win, or timeout. */
-int scoreMoveMM(Board9 board, Pos p, int player, int depth) {
-    (void)depth;
-    if (searchExpired()) return -2;
-    mm_score_count++;
-    set9(&board, p.x, p.y, player);
-    if (board.winner >= 0) return board.winner == 2 ? 0 : (board.winner == 0 ? -1 : 1);
-    int proved = countProof(board, possibleMasterLines(board));
-    if (proved >= 0) return proved == 0 ? -1 : 1;
-    u16 bit = 1 << ((p.y % 3)*3 + p.x % 3);
-    unsigned char key[KEY_SIZE];
-    searchKey(&board, bit, 1-player, 65535, key);
-    u32 data;
-    if (SEARCH_CACHE_FIND(map, key, &data)) return (int)data-1;
-    Moves2 moves;
-    validMoves2(&board, &moves, p.x%3, p.y%3);
-    int best = player == 0 ? -10 : 10;
-    Pos next;
-    while (moveNext(&moves, &next)) {
-        int score = scoreMoveMM(board, next, 1-player, 0);
-        if (score == -2) return -2;
-        if ((player == 0 && score > best) || (player == 1 && score < best)) best = score;
-        if (best == (player == 0 ? 1 : -1)) break;
-    }
-    addHMEntry(map, key, best+1);
-    return best;
-}
-
-/* Chooses an exact-search root move, or returns the timeout sentinel. */
-Pos evaluateMovesMM(Board9 *board, Moves2 *valid_moves) {
-    clearHM(map);
-    resetMoveIt(valid_moves);
-    int best = 10;
-    Moves tied = {0};
-    Pos move;
-    while (moveNext(valid_moves, &move)) {
-        if (getElaspedTime() >= search_deadline) return (Pos){255,255};
-        int score = scoreMoveMM(*board, move, 0, 0);
-        if (score == -2) return (Pos){255,255};
-        INSTRUMENT_ROOT_EVALUATED(spaces_left);
-        if (score < best) { best = score; tied.count = 0; }
-        if (score == best) push(&tied, move);
-        /* A proven win needs no further comparison. */
-        if (best == -1) {
-            INSTRUMENT_SELECTED(TERMINAL_SCORE);
-            return move;
-        }
-    }
-    INSTRUMENT_SELECTED(best == 1 ? -TERMINAL_SCORE : 0);
-    return tied.moves[rand() % tied.count];
-}
-
 typedef struct Score_s {
     u16 p0;
     u16 p1;
@@ -257,8 +155,6 @@ typedef struct Score_s {
    production has no command-line path that changes these lever defaults. */
 static double count_scale = LEVER_COUNT_SCALE;
 static int uscale = LEVER_USCALE;
-static int exact_primary_spaces = LEVER_EXACT_PRIMARY_SPACES;
-static int exact_narrow_spaces = LEVER_EXACT_NARROW_SPACES;
 #define COUNT_UNIT 20
 static u16 f1_cache[POSS_BOARDS][2];
 static const u16 scoring_lines[8] = {7,56,448,73,146,292,273,84};
@@ -480,6 +376,37 @@ static int isLegalMove(int x, int y, Moves2 *moves)
     return !!(moves->mask[cell] & (1u << bit));
 }
 
+/* Resolves one START_RULE letter to a cell index, drawing a random member of
+ * the D or C class.  Caller guarantees the letter is M, C or D. */
+static int startRuleIndex(char cell_class) {
+    static const int diagonal[] = {0, 2, 6, 8};
+    static const int cardinal[] = {1, 3, 5, 7};
+    switch (cell_class) {
+        case 'M': return 4;
+        case 'D': return diagonal[rand() % 4];
+        case 'C': return cardinal[rand() % 4];
+    }
+    error("Invalid START_RULE cell class '%c'\n", cell_class);
+    return -1; /* Unreachable: error() terminates the process. */
+}
+
+/* Chooses the opening move from START_RULE (see the diagram beside its
+ * definition): the first letter names the outer grid, the second the cell
+ * inside it.  Intended only for the empty opening board, where every cell is
+ * legal.  Returns internal x = column, y = row coordinates like the rest of
+ * the bot. */
+Pos getStartMove(void) {
+    if (strlen(START_RULE) != 2)
+        error("START_RULE must be exactly two M/C/D letters, got \"%s\"\n", START_RULE);
+
+    int outer = startRuleIndex(START_RULE[0]);
+    int inner = startRuleIndex(START_RULE[1]);
+
+    /* outer is the small board index; inner is the cell within that board. */
+    Pos move = { (outer % 3) * 3 + inner % 3, (outer / 3) * 3 + inner / 3 };
+    return move;
+}
+
 /* Applies the opponent move, chooses our legal reply, then updates the board. */
 Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
 {
@@ -492,38 +419,22 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     search_nodes = 0;
     INSTRUMENT_RESET();
 
-    spaces_left = calcPlayable(board);
+    /* First turn: there is no opponent move to answer, so play the configured
+       START_RULE opening directly instead of searching. */
+    if (last_move.x == -1) {
+        INSTRUMENT_MODE("opening");
+        Pos move = getStartMove();
+        if (!isLegalMove(move.x, move.y, valid_moves))
+            error("START_RULE produced an illegal opening move\n");
+        set9(board, move.x, move.y, 0);
+        return move;
+    }
+
     search_deadline = move_budget;
 
-    Pos my_move;
-
-    int primary_exact_trigger = spaces_left <= exact_primary_spaces;
-    int narrow_exact_trigger =
-        !primary_exact_trigger &&
-        spaces_left < exact_narrow_spaces &&
-        valid_moves->count < 10;
-    int try_exact_search = primary_exact_trigger || narrow_exact_trigger;
-
-    if (try_exact_search) {
-        INSTRUMENT_MODE("exact");
-        double elapsed = getElaspedTime();
-        search_deadline = elapsed + (move_budget - elapsed) * 0.5;
-        uint64_t timed_start = get_gtod_clock_time();
-        my_move = evaluateMovesMM(board, valid_moves);
-        game_search_us += get_gtod_clock_time() - timed_start;
-
-        search_deadline = move_budget;
-        if (my_move.x == 0xFF) {
-            INSTRUMENT_MODE("exact-fallback");
-            timed_start = get_gtod_clock_time();
-            my_move = evaluateMovesShallowTimed(board, valid_moves);
-            game_search_us += get_gtod_clock_time() - timed_start;
-        }
-    } else {
-        uint64_t timed_start = get_gtod_clock_time();
-        my_move = evaluateMovesShallowTimed(board, valid_moves);
-        game_search_us += get_gtod_clock_time() - timed_start;
-    }
+    uint64_t timed_start = get_gtod_clock_time();
+    Pos my_move = evaluateMovesShallowTimed(board, valid_moves);
+    game_search_us += get_gtod_clock_time() - timed_start;
 
     game_positions += evaluation_calls;
     game_cache_hits += turn_cache_hits;

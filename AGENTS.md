@@ -32,6 +32,17 @@ not a strength improvement until it has a recorded, reproducible comparison.
 
 ## Source boundaries
 
+- `src/` contains the C source for the bots, shared game engine, and local
+  game runner. Active C work belongs here.
+- `scripts/` contains Python and fish scripts for building, running, testing,
+  summarizing, and retrieving results. Use Bash only when needed.
+- `reports/` contains human-readable reports from runs and investigations.
+  Each report type has a stable `latest` name; previous readable reports may
+  be numbered for history. CSV data and logs do not belong here.
+- `work/` is scratch space for raw CSVs, logs, and intermediate files. It must
+  always be safe to clean. Keep data here only while it may help answer more
+  detailed questions about a report; promote any evidence that must survive
+  cleanup to a deliberate durable location first.
 - New bot policy and search work belongs in `src/bots/ai_minimax.c`.
 - Shared game rules, coordinate conversions and board representation belong in
   `src/engine/`.
@@ -54,11 +65,12 @@ not a strength improvement until it has a recorded, reproducible comparison.
 5. Keep raw data only long enough to support the conclusion.  Curated results
    may go under `published-results/`; the progress log is the durable record.
 
-Generated reports belong in ignored `reports/`; logs, CSV game data and other
-supporting evidence belong in ignored `work/`. Preserve the numbered raw run
-folders alongside any report being cited in `progress.md`. Never automate
-deletion of `progress.md`, `published-results/`, source files, or a run the
-user explicitly asked to preserve.
+Generated reports belong in ignored `reports/`; disposable supporting data
+belongs in ignored `work/`. A report must remain understandable without its
+scratch data. If `progress.md` cites raw evidence that must persist, put that
+evidence under `published-results/` and update the citation before cleaning
+`work/`. Never automate deletion of `progress.md`, `published-results/`, source
+files, or a run the user explicitly asked to preserve.
 
 The normal bot also reports one cumulative end-of-game local stats
 record (timed search microseconds, scored positions, cache hits), independent
@@ -66,6 +78,12 @@ of `INSTRUMENT`; the rig stores it in each game CSV row. `scripts/summarize-rig.
 totals these and computes positions/s from the totals. Use
 `fish scripts/interpret_multi_csv.fish` to render the latest summary as HTML,
 or pass a specific summary CSV path.
+
+Game CSV rows record the rig seed and starting player. The rig passes that
+same seed to `ai_minimax` and, with `--p1-game-seed`, to `orig --seed`. Keep
+these fields with any interesting game. A fixed seed is not a guarantee of
+move-for-move replay while either bot uses wall-clock search deadlines; verify
+replay using the recorded move trace or `trace_hash`.
 
 ## Tool output convention
 
@@ -78,11 +96,12 @@ or pass a specific summary CSV path.
   report then takes the original, stable name.  Use this for readable output
   files, not raw intermediate data.
 - Keep intermediate files under `work/`. A new run clears its preflight files
-  and archives the prior successful raw run as `work/latest.N/`. If a run or
-  summarizer fails, retain its raw files so
+  and may archive the prior raw run as `work/latest.N/`; all of `work/` remains
+  cleanable. If a run or summarizer fails, temporarily retain its raw files so
   `fish scripts/resummarize.fish <run-directory>` can retry without replaying games.
-- Run a short end-to-end preflight through parsing and report generation
-  before starting a long batch.  Never leave a summarizer's first execution
+- Run a short end-to-end preflight through parsing and an in-memory HTML
+  rendering check before starting a long batch; do not write a preflight
+  report. Never leave a summarizer's first execution
   until after the expensive work.
 
 ## Tool and context budget

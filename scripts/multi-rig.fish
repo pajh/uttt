@@ -40,7 +40,7 @@ if test "$workers" -lt 1 -o "$games_per_worker" -lt 1
     exit 2
 end
 
-set -l rig_command "./bin/gamerig -G$games_per_worker --p0 '$bot_p0' --p1 '$bot_p1' --quiet-bots"
+set -l rig_command "./bin/gamerig -G$games_per_worker --p0 '$bot_p0' --p1 '$bot_p1' --p1-game-seed --quiet-bots"
 make bin/gamerig bin/orig bin/ai_minimax
 or exit $status
 

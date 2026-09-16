@@ -80,8 +80,6 @@ int main(void) {
     start_time=get_gtod_clock_time();search_deadline=1;search_nodes=0;
     Pos winning=evaluateMovesShallowTimed(&b,&m);
     assert(winning.x==8 && winning.y==0 && search_nodes==1);
-    winning=evaluateMovesMM(&b,&m);
-    assert(winning.x==8 && winning.y==0);
     /* A genuine three-ply fork: every opponent reply still permits a master win. */
     b=(Board9){.winner=-1};
     handleCellWin(&b,0,0,0);handleCellWin(&b,1,0,0);
@@ -145,7 +143,7 @@ int main(void) {
                      -lead>remaining && !(reference&1) ? 1 : -1;
         assert(countProof(master,reference)==expected);
     }
-    /* Nonterminal count proof must propagate in both solvers. */
+    /* Nonterminal count proof must propagate through search. */
     b=(Board9){.winner=-1};
     int count_owners[]={0,0,1,1,0,0,0};
     for(int i=0;i<7;i++) handleCellWin(&b,i%3,i/3,count_owners[i]);
@@ -153,8 +151,6 @@ int main(void) {
     clearHM(map);
     won=evaluateShallow(b,0,7,1,3,0);
     assert(won.p0==TERMINAL_SCORE && won.p1==0);
-    start_time=get_gtod_clock_time();search_deadline=1;search_nodes=0;
-    assert(scoreMoveMM(b,(Pos){3,6},0,0)==-1);
     b=(Board9){.winner=-1};
     int tied_owners[]={0,1,0,0,1,1,1,0};
     for(int i=0;i<8;i++) handleCellWin(&b,i%3,i/3,tied_owners[i]);

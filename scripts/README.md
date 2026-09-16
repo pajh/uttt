@@ -33,6 +33,26 @@ stats record at game end in local rig runs, whether or not `INSTRUMENT` is on.
 Search time covers the timed evaluation functions only; positions scored are
 leaf scoring calls, and positions/s uses the aggregate totals.
 
+Each game row records its numeric `seed` and `starting_player`. The rig seeds
+its legal-move shuffle and gives the same game seed to `ai_minimax` (`CG_SEED`)
+and `orig` (`--seed`). `--p1-game-seed` enables the latter for the normal
+matchup. The seed changes by one for each game in a worker. To rerun one saved
+game with the same binaries, use the row's seed and starting player, for
+example:
+
+```fish
+./bin/gamerig -G1 --p0 ./bin/ai_minimax --p1 ./bin/orig \
+    --p1-game-seed --seed 20261001 --p0-first \
+    --games-csv work/replay-games.csv --moves-csv work/replay-moves.csv
+```
+
+Use `--p1-first` when `starting_player` is 1. Compare `trace_hash` or the move
+CSV to see whether the rerun matched. Seeds alone do **not** guarantee an exact
+replay: both bots stop some searches by elapsed wall-clock time. Repeated
+one-game checks on two seeds and both starting players matched in two of four
+cases; the other two first diverged at an `orig` move from the same board.
+Deterministic search budgeting would be a separate behavioural change.
+
 To regenerate the report from saved data without playing games:
 
 ```fish
