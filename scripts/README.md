@@ -28,7 +28,7 @@ The HTML displays these as local time, its generation time, and elapsed
 `MMMM:SS` at the top. Older runs without a timing file show “not recorded”.
 The HTML shows wins and
 losses by type, draws, and per-bot search totals. The bot sends one cumulative
-stats record at game end in local rig runs, whether or not `INSTRUMENT` is on.
+stats record at game end in local rig runs, whether or not C&C instrumentation is on.
 `orig` does not report these figures, so its metrics display as unavailable.
 Search time covers the timed evaluation functions only; positions scored are
 leaf scoring calls, and positions/s uses the aggregate totals.
@@ -71,9 +71,40 @@ never play games. `summarize-rig.py` combines worker game CSVs and identities;
 `rotate-report.fish` is the shared numbered-archive helper.
 
 For a single detailed game, use `fish scripts/instrument-one-game.fish`.
-It builds the same bot with `INSTRUMENT`, runs one game, and uses
-`instrument-report.py` to publish `reports/instrument/report.html`; raw turn
-CSV and logs remain in `work/instrument/`.
+It builds `ai_minimax` with local C&C support, requests `INSTRUMENT` through
+the rig, and uses `instrument-report.py` to publish
+`reports/instrument/report.html`. The rig receives turn summaries and every
+completed root-move score; raw turn/score CSVs and logs remain in
+`work/instrument/`. The bot no longer opens an instrumentation file. The
+HTML leads with a 9×9 board for each p0 decision: previous X/O moves, the
+latest completed score in each evaluated candidate cell, and the selected
+cell highlighted. The opponent's immediately preceding move has a purple
+`LAST` marker; closed small boards have X WON/O WON/DRAW badges and strong
+borders. The old timing chart and turn table remain below. The
+instrument run uses a 75 ms search budget to leave room for transmitting
+telemetry; it is for inspection, not strength comparison. A normal
+`multi-rig.fish` run rebuilds the plain bot before its batch.
+`work/instrument/assistant-view.md` is generated from the same game as a
+compact, text-first companion for analysis: board before each turn, master
+ownership, all completed candidate/depth scores, the chosen move and reply.
+
+To investigate a saved position without replaying the game, use the Python
+workbench (zero-based row/column coordinates and zero-based `--ply`):
+
+```fish
+python3 -B scripts/solve-position.py --moves-csv work/instrument/all-moves.csv \
+    --ply 42 --compare 1,3 0,3 --fastest-win --explain-eval
+```
+
+`solve-position.py` independently applies the game rules and proves terminal
+win/draw/loss against all replies; `--fastest-win` finds the earliest guaranteed
+winning horizon, including an opponent trying to delay. `--explain-eval` mirrors
+the current bot's one-ply score to expose why its preference differs. The
+default proof budget is 60 seconds in total (`--seconds` changes it), so an
+unfinished result is explicitly marked unresolved. A custom position can be
+loaded with `--position FILE` instead of the move CSV; see the script's opening
+comment for the JSON format. The displayed continuation is one best-play line,
+not necessarily the opponent's most delaying line.
 
 All commands above are run from the repository root. The old CSV reports from
 before this layout change were retained in `work/legacy-summary-reports/`.

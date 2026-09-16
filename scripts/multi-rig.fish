@@ -41,7 +41,7 @@ if test "$workers" -lt 1 -o "$games_per_worker" -lt 1
 end
 
 set -l rig_command "./bin/gamerig -G$games_per_worker --p0 '$bot_p0' --p1 '$bot_p1' --p1-game-seed --quiet-bots"
-make bin/gamerig bin/orig bin/ai_minimax
+make LOCAL_RIG=0 bin/gamerig bin/orig bin/ai_minimax
 or exit $status
 
 # Test the complete data path with one game per worker before the long run.

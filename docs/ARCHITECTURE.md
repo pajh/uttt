@@ -38,6 +38,45 @@ the small board was drawn, so the closed mask is part of search identity.
 the complete board, directed destination, player to move and remaining depth.
 The hash map is fixed-capacity so a move search does not perform allocations.
 
+## Local rig control, version 1
+
+Opt-in local builds (`make LOCAL_RIG=1 bin/ai_minimax`) define `LOCAL_RIG`
+and include `local_rig.h`; normal `make` and `multi-rig.fish` do not.
+`--HELLO` advertises `LOCAL_RIG=1`; the rig sends controls only to bots that
+advertise this capability. The one-file CodinGame submission does not define
+`LOCAL_RIG`, so every hook compiles away. Standard input and output retain the
+unmodified CodinGame turn protocol in both builds.
+
+The rig passes a bidirectional Unix socket as file descriptor 3. Before each
+ordinary turn input, it sends `TURN n`, zero or more commands, and `END`, one
+line each. After reading the ordinary input, the bot consumes this complete
+control frame. The turn number is the bot's one-based turn count. Supported
+commands are `FORCE row col`, `USCALE integer`, `COUNT_SCALE number`, and
+`TIME_MS number`. Forced moves must be in the ordinary legal-action list and
+are applied to the bot's normal board state. Settings persist for the game;
+the current rig repeats configured settings each turn. There is no algorithm
+selector yet because the bot currently has one search algorithm.
+
+When the rig sends `INSTRUMENT`, the bot emits each completed root evaluation
+as `SCORE turn depth row col score` and one compact `TURN_STATS` record per
+turn with time, selected move/score, cache and search counters. It sends
+`END turn` before its ordinary move. The rig drains socket and stdout
+concurrently under one response deadline, writes optional `--scores-csv` and
+`--instrument-csv` files, and treats malformed or missing instrument frames as
+a failed response. Scores describe candidate moves, not every leaf evaluation.
+The bot writes no instrument file. The channel is
+local testing infrastructure, not a way to obtain extra CodinGame compute
+time or send extra stdout lines.
+
+Example: `./bin/gamerig -G1 --p0 ./bin/ai_minimax --p1 ./bin/orig
+--force-opening 0,0 --rig-uscale 7 --rig-count-scale 1.2 --rig-time-ms 80
+--scores-csv work/local-rig-scores.csv` after building with `LOCAL_RIG=1`.
+The forced opening is sent as a
+control command to capable bots; legacy bots still receive a restricted legal
+list for that opening. `--force-prefix '4,4;3,3;0,0'` instead forces three
+consecutive plies (for either starting player) and then returns control to the
+bots. The rig rejects a prefix move that is illegal in the reached position.
+
 ## Important implementation constraints
 
 `board.h` and `hashmap.h` contain definitions and globals, not just

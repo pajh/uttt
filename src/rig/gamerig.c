@@ -17,6 +17,7 @@
 #include <fcntl.h>
 #include <wordexp.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
 
 #include "board.h"
 
@@ -32,6 +33,8 @@ char bot_identity[2][2048];
 unsigned rig_seed = 20260914;
 unsigned game_seed;
 Pos forced_opening = {-1, -1};
+Pos forced_prefix[81];
+int forced_prefix_count;
 int fixed_starting_player = -1;
 int seed_p1_from_game = 0;
 char opening_class[4] = "";
@@ -42,6 +45,11 @@ int timeouts[2], overruns[2], started_scores[2][3];
 uint64_t response_count[2], response_total[2], max_first[2], max_later[2];
 uint64_t game_search_us[2], game_positions[2], game_cache_hits[2];
 int game_stats_present[2];
+int local_capable[2];
+FILE *scores_csv;
+FILE *instrument_csv;
+int rig_uscale = -1;
+double rig_count_scale = -1, rig_time_ms = -1;
 
 int failures[2];
 
@@ -99,9 +107,10 @@ void saveWeights(const char* file_name, int weights[], double* win_per)
 }
 
 
-pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_pipe, int append_seed) {
+pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_pipe, int *control_fd, int append_seed) {
     int in[2], out[2];
-    if (pipe(in) < 0 || pipe(out) < 0) error("pipe");
+    int control[2];
+    if (pipe(in) < 0 || pipe(out) < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, control) < 0) error("pipe/socketpair");
     for (int i=0;i<2;i++) {
         fcntl(in[i], F_SETFD, FD_CLOEXEC);
         fcntl(out[i], F_SETFD, FD_CLOEXEC);
@@ -109,9 +118,12 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
     pid_t pid = fork();
     if (pid < 0) error("fork");
     if (pid == 0) {
-        if (dup2(in[0], STDIN_FILENO) < 0 || dup2(out[1], STDOUT_FILENO) < 0)
+        if (dup2(in[0], STDIN_FILENO) < 0 || dup2(out[1], STDOUT_FILENO) < 0 || dup2(control[1], 3) < 0)
             _exit(126);
-        close(in[0]); close(in[1]); close(out[0]); close(out[1]);
+        close(in[1]); close(out[0]); close(control[0]); close(control[1]);
+        if (in[0] != 3) close(in[0]);
+        if (out[1] != 3) close(out[1]);
+        setenv("CG_RIG_FD", "3", 1);
         char seed[32];
         snprintf(seed,sizeof(seed),"%u",game_seed);
         setenv("CG_SEED",seed,1);
@@ -132,17 +144,17 @@ pid_t runAndLink(char* file, char*cmd, char* arg_1, int* read_pipe, int* write_p
         perror(file);
         _exit(127);
     }
-    close(in[0]); close(out[1]);
-    *write_pipe = in[1]; *read_pipe = out[0];
+    close(in[0]); close(out[1]); close(control[1]);
+    *write_pipe = in[1]; *read_pipe = out[0]; *control_fd = control[0];
     return pid;
 }
 
 /* Runs a bot's optional --HELLO command once before a batch.  Historical bots
    need not implement it; their absence is recorded plainly rather than faked. */
 static void collectBotHello(int player) {
-    int read_pipe, write_pipe;
+    int read_pipe, write_pipe, control_fd;
     pid_t pid = runAndLink(bot_paths[player], bot_paths[player], "--HELLO",
-        &read_pipe, &write_pipe, 0);
+        &read_pipe, &write_pipe, &control_fd, 0);
     close(write_pipe);
 
     struct pollfd ready = {read_pipe, POLLIN, 0};
@@ -155,10 +167,12 @@ static void collectBotHello(int player) {
         }
     }
     close(read_pipe);
+    close(control_fd);
     kill(pid, SIGTERM);
     waitpid(pid, NULL, 0);
 
     strncpy(bot_identity[player], hello, sizeof(bot_identity[player]) - 1);
+    local_capable[player] = strstr(hello, " LOCAL_RIG=1") != NULL;
     bot_identity[player][sizeof(bot_identity[player]) - 1] = 0;
     fprintf(stderr, "Player %d hello: %s\n", player, bot_identity[player]);
     if (identity_file) {
@@ -209,37 +223,92 @@ static void collectGameStats(int player, int read_pipe)
     }
 }
 
-Pos getMove(int player, Pos last_move, Moves *valid_moves, int read_pipe, int write_pipe, int move_no, int limit_ms) {
+Pos getMove(int player, Pos last_move, Moves *valid_moves, int read_pipe, int write_pipe,
+    int control_fd, Pos forced, int game, int move_no, int limit_ms) {
     Pos failed = {-1,-1};
     timed_out = 0;
+    uint64_t deadline = get_gtod_clock_time() + (uint64_t)limit_ms * 1000;
+    if (local_capable[player]) {
+        char commands[256];
+        int n = snprintf(commands, sizeof(commands), "TURN %d\n", move_no / 2 + 1);
+        if (rig_uscale >= 0) n += snprintf(commands+n, sizeof(commands)-n, "USCALE %d\n", rig_uscale);
+        if (rig_count_scale >= 0) n += snprintf(commands+n, sizeof(commands)-n, "COUNT_SCALE %.9g\n", rig_count_scale);
+        if (rig_time_ms >= 0) n += snprintf(commands+n, sizeof(commands)-n, "TIME_MS %.9g\n", rig_time_ms);
+        if (forced.x >= 0) n += snprintf(commands+n, sizeof(commands)-n, "FORCE %d %d\n", forced.y, forced.x);
+        if (player == 0 && (instrument_csv || scores_csv))
+            n += snprintf(commands+n, sizeof(commands)-n, "INSTRUMENT\n");
+        n += snprintf(commands+n, sizeof(commands)-n, "END\n");
+        if (!writeAll(control_fd, commands, n)) return failed;
+    }
     char input[2048];
     int used = snprintf(input, sizeof(input), "%d %d\n%d\n", last_move.y, last_move.x, valid_moves->count);
     for (int i=0;i<valid_moves->count;i++)
         used += snprintf(input+used, sizeof(input)-used, "%d %d\n", valid_moves->moves[i].y, valid_moves->moves[i].x);
     bcache[0] = 0;
     if (!writeAll(write_pipe, input, used)) return failed;
-    uint64_t deadline = get_gtod_clock_time() + (uint64_t)limit_ms * 1000;
     size_t length = 0;
+    char event[160];
+    size_t event_length = 0;
+    int control_done = !local_capable[player], move_done = 0;
+    int instrument_seen = 0;
+    Pos selected = failed;
     while (length < sizeof(bcache)-1) {
         uint64_t now = get_gtod_clock_time();
         if (now >= deadline) {
             timed_out = 1;
             return failed;
         }
-        struct pollfd ready = {read_pipe, POLLIN, 0};
-        int result = poll(&ready, 1, (int)((deadline-now+999)/1000));
+        struct pollfd ready[2] = {{move_done ? -1 : read_pipe, POLLIN, 0},
+            {control_done ? -1 : control_fd, POLLIN, 0}};
+        int result = poll(ready, local_capable[player] && !control_done ? 2 : 1,
+            (int)((deadline-now+999)/1000));
         if (result < 0 && errno == EINTR) continue;
         if (result <= 0) { timed_out = result == 0; return failed; }
-        char ch;
-        ssize_t n = read(read_pipe, &ch, 1);
-        if (n < 0 && errno == EINTR) continue;
-        if (n != 1) return failed;
-        bcache[length++] = ch; bcache[length] = 0;
-        if (ch == '\n') {
-            Pos p;
-            if (sscanf(bcache, "%d%d", &p.y, &p.x) != 2) return failed;
-            return p;
+        if (!control_done && (ready[1].revents & (POLLIN | POLLHUP))) {
+            char ch;
+            if (read(control_fd, &ch, 1) != 1) return failed;
+            if (ch == '\n') {
+                event[event_length] = 0;
+                int turn, depth, row, col, score;
+                if (sscanf(event, "SCORE %d %d %d %d %d", &turn, &depth, &row, &col, &score) == 5) {
+                    if (turn != move_no / 2 + 1) return failed;
+                    if (scores_csv) fprintf(scores_csv, "%d,%d,%d,%d,%d,%d,%d\n",
+                        game, move_no, player, depth, row, col, score);
+                } else if (strncmp(event, "TURN_STATS ", 11) == 0) {
+                    int budget_ms, legal, evaluated, deepest, selected_row, selected_col, selected_score;
+                    double elapsed_ms;
+                    unsigned long positions, lookups, hits;
+                    char search[32];
+                    if (sscanf(event,
+                        "TURN_STATS %d %d %lf %d %d %d %d %d %d %lu %lu %lu %31s",
+                        &turn, &budget_ms, &elapsed_ms, &legal, &evaluated, &deepest,
+                        &selected_row, &selected_col, &selected_score, &positions,
+                        &lookups, &hits, search) != 13 || turn != move_no / 2 + 1)
+                        return failed;
+                    instrument_seen = 1;
+                    if (instrument_csv) fprintf(instrument_csv,
+                        "%d,%d,%.3f,%d,%d,%d,%d,%d,%d,%lu,%lu,%lu,%s\n",
+                        turn, budget_ms, elapsed_ms, legal, evaluated, deepest,
+                        selected_row, selected_col, selected_score, positions,
+                        lookups, hits, search);
+                } else if (sscanf(event, "END %d", &turn) == 1 && turn == move_no / 2 + 1) {
+                    if (player == 0 && instrument_csv && !instrument_seen) return failed;
+                    control_done = 1;
+                } else return failed;
+                event_length = 0;
+            } else if (event_length + 1 < sizeof(event)) event[event_length++] = ch;
+            else return failed;
         }
+        if (!move_done && (ready[0].revents & (POLLIN | POLLHUP))) {
+            char ch;
+            if (read(read_pipe, &ch, 1) != 1) return failed;
+            bcache[length++] = ch; bcache[length] = 0;
+            if (ch == '\n') {
+                if (sscanf(bcache, "%d%d", &selected.y, &selected.x) != 2) return failed;
+                move_done = 1;
+            }
+        }
+        if (move_done && control_done) return selected;
     }
     return failed;
 }
@@ -280,7 +349,7 @@ int playGame(int game, int player, char* p0_arg)
         opening_grid = (game_opening.y / 3) * 3 + game_opening.x / 3;
         opening_cell = (game_opening.y % 3) * 3 + game_opening.x % 3;
     }
-    int read_pipe[2], write_pipe[2];
+    int read_pipe[2], write_pipe[2], control_fd[2];
     int play_counts[2];
     int move_no = 0;
     uint64_t time_spent[2];
@@ -293,10 +362,10 @@ int playGame(int game, int player, char* p0_arg)
     }
 
     // Player 0
-    bot_pids[0] = runAndLink(bot_paths[0], bot_paths[0], p0_arg, &read_pipe[0], &write_pipe[0], 0);
+    bot_pids[0] = runAndLink(bot_paths[0], bot_paths[0], p0_arg, &read_pipe[0], &write_pipe[0], &control_fd[0], 0);
 
     // Player 1
-    bot_pids[1] = runAndLink(bot_paths[1], bot_paths[1], "", &read_pipe[1], &write_pipe[1], seed_p1_from_game);
+    bot_pids[1] = runAndLink(bot_paths[1], bot_paths[1], "", &read_pipe[1], &write_pipe[1], &control_fd[1], seed_p1_from_game);
 
     Board9 board = {0};
     board.winner = -1;
@@ -316,9 +385,13 @@ int playGame(int game, int player, char* p0_arg)
 
     while (board.winner < 0)
     {
-        if (move_no == 0 && game_opening.x >= 0) {
+        Pos forced = move_no < forced_prefix_count ? forced_prefix[move_no] :
+            move_no == 0 ? game_opening : (Pos){-1,-1};
+        if (forced.x >= 0 && !containsMove(&valid_moves, forced))
+            error("Forced prefix contains an illegal move");
+        if (forced.x >= 0 && !local_capable[player]) {
             valid_moves.count = 1;
-            valid_moves.moves[0] = game_opening;
+            valid_moves.moves[0] = forced;
         }
 
         /* CodinGame shuffles its legal action list; this changes only ordering. */
@@ -331,7 +404,8 @@ int playGame(int game, int player, char* p0_arg)
         int limit_ms = response_ms ? response_ms : arena_ms * 120 / 100;
         uint64_t begin = get_gtod_clock_time();
 
-        Pos played = getMove(player, last_move, &valid_moves, read_pipe[player], write_pipe[player], move_no++, limit_ms);
+        Pos played = getMove(player, last_move, &valid_moves, read_pipe[player], write_pipe[player],
+            control_fd[player], forced, game, move_no++, limit_ms);
 
         uint64_t end = get_gtod_clock_time();;
         uint64_t duration = end - begin;
@@ -413,6 +487,7 @@ int playGame(int game, int player, char* p0_arg)
         close(write_pipe[i]);
         collectGameStats(i, read_pipe[i]);
         close(read_pipe[i]);
+        close(control_fd[i]);
         /* Bots may not handle EOF; terminate and reap every match process. */
         kill(bot_pids[i], SIGTERM);
         while (waitpid(bot_pids[i], NULL, 0) < 0 && errno == EINTR) {}
@@ -586,6 +661,17 @@ int main(int argc,char* argv[])
             identity_file=fopen(argv[++i],"w"); if(!identity_file) error("identity file");
         }
         else if (strcmp(argv[i], "--quiet-bots") == 0) quiet_bots = 1;
+        else if (strcmp(argv[i], "--rig-uscale") == 0 && i+1<argc) rig_uscale = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--rig-count-scale") == 0 && i+1<argc) rig_count_scale = atof(argv[++i]);
+        else if (strcmp(argv[i], "--rig-time-ms") == 0 && i+1<argc) rig_time_ms = atof(argv[++i]);
+        else if (strcmp(argv[i], "--scores-csv") == 0 && i+1<argc) {
+            scores_csv = fopen(argv[++i], "w"); if (!scores_csv) error("scores csv");
+            fputs("game,ply,player,depth,row,col,score\n", scores_csv);
+        }
+        else if (strcmp(argv[i], "--instrument-csv") == 0 && i+1<argc) {
+            instrument_csv = fopen(argv[++i], "w"); if (!instrument_csv) error("instrument csv");
+            fputs("move,budget_ms,elapsed_ms,legal_moves,possibilities_evaluated,deepest_completed_ply,winning_row,winning_col,winning_score,scored_positions,cache_lookups,cache_hits,search\n", instrument_csv);
+        }
         else if (strcmp(argv[i], "--p1-game-seed") == 0) seed_p1_from_game = 1;
         else if (strcmp(argv[i], "--seed") == 0 && i+1<argc) rig_seed = (unsigned)strtoul(argv[++i],NULL,10);
         else if (strcmp(argv[i], "--force-opening") == 0 && i+1<argc) {
@@ -597,6 +683,24 @@ int main(int argc,char* argv[])
             forced_opening.x = col;
             forced_opening.y = row;
             fixed_starting_player = 0;
+        }
+        else if (strcmp(argv[i], "--force-prefix") == 0 && i+1<argc) {
+            char *copy = strdup(argv[++i]);
+            if (!copy) error("force-prefix allocation");
+            char *save = NULL;
+            for (char *item = strtok_r(copy, ";", &save); item;
+                item = strtok_r(NULL, ";", &save)) {
+                int row, col; char extra;
+                if (forced_prefix_count == 81 ||
+                    sscanf(item, "%d,%d%c", &row, &col, &extra) != 2 ||
+                    row < 0 || row > 8 || col < 0 || col > 8) {
+                    fputs("--force-prefix requires row,col;row,col...\n", stderr);
+                    free(copy); return 1;
+                }
+                forced_prefix[forced_prefix_count++] = (Pos){col,row};
+            }
+            free(copy);
+            if (!forced_prefix_count) return 1;
         }
         else if (strcmp(argv[i], "--opening-class") == 0 && i+1<argc) {
             const char *value = argv[++i];
@@ -624,11 +728,14 @@ int main(int argc,char* argv[])
         }
         else if (strcmp(argv[i], "--timeout-ms") == 0 && i+1<argc) response_ms = atoi(argv[++i]);
         else {
-            fprintf(stderr,"Usage: %s [-G<count>] [--p0 executable] [--p1 executable] [--p0-first | --p1-first] [--p1-game-seed] [--force-opening row,col | --opening-class MD] [--timeout-ms milliseconds] [--quiet-bots] [--seed integer] [--games-csv path] [--moves-csv path]\n",argv[0]);
+            fprintf(stderr,"Usage: %s [-G<count>] [--p0 executable] [--p1 executable] [--p0-first | --p1-first] [--p1-game-seed] [--force-opening row,col | --force-prefix 'row,col;...' | --opening-class MD] [--rig-uscale N] [--rig-count-scale N] [--rig-time-ms N] [--instrument-csv path] [--scores-csv path] [--timeout-ms milliseconds] [--quiet-bots] [--seed integer] [--games-csv path] [--moves-csv path]\n",argv[0]);
             return 1;
         }
     }
-    if (games < 1 || response_ms < 0 || (*opening_class && forced_opening.x >= 0)) return 1;
+    if (games < 1 || response_ms < 0 || (*opening_class && forced_opening.x >= 0) ||
+        (forced_prefix_count && (forced_opening.x >= 0 || *opening_class)) ||
+        rig_uscale > 1000 || rig_count_scale > 1000 || rig_time_ms > 900 ||
+        (rig_uscale < -1) || (rig_count_scale < -1) || (rig_time_ms < -1)) return 1;
     for (int i=0;i<2;i++) {
         wordexp_t parsed;
         if(wordexp(bot_paths[i],&parsed,WRDE_NOCMD) != 0) error("Invalid quoted bot command");
@@ -636,6 +743,15 @@ int main(int argc,char* argv[])
         wordfree(&parsed);
     }
     for (int i=0;i<2;i++) collectBotHello(i);
+    if ((instrument_csv || scores_csv) && !local_capable[0]) {
+        fputs("p0 must advertise LOCAL_RIG=1 for instrumentation\n", stderr);
+        return 1;
+    }
+    if ((rig_uscale >= 0 || rig_count_scale >= 0 || rig_time_ms >= 0) &&
+        !local_capable[0] && !local_capable[1]) {
+        fputs("No bot supports LOCAL_RIG=1 experiment controls\n", stderr);
+        return 1;
+    }
     if (*opening_class)
         printf("%s versus %s; p0 always starts using class %s; timeout override %d ms (0 = 1200/120, warnings above 1000/100); seed %u\n",bot_paths[0],bot_paths[1],opening_class,response_ms,rig_seed);
     else if (forced_opening.x >= 0)
@@ -659,6 +775,8 @@ int main(int argc,char* argv[])
     printf("p0 starting: %d/%d/%d; p1 starting: %d/%d/%d (p0 wins / p1 wins / draws)\n",started_scores[0][0],started_scores[0][1],started_scores[0][2],started_scores[1][0],started_scores[1][1],started_scores[1][2]);
     if (games_csv) fclose(games_csv);
     if (moves_csv) fclose(moves_csv);
+    if (scores_csv) fclose(scores_csv);
+    if (instrument_csv) fclose(instrument_csv);
     /* A bot timeout, crash or invalid move is a completed game result: retain
        the forfeit in the CSV and let long experiment batches continue. */
     return 0;

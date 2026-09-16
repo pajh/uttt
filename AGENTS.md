@@ -74,10 +74,21 @@ files, or a run the user explicitly asked to preserve.
 
 The normal bot also reports one cumulative end-of-game local stats
 record (timed search microseconds, scored positions, cache hits), independent
-of `INSTRUMENT`; the rig stores it in each game CSV row. `scripts/summarize-rig.py`
+of C&C instrumentation; the rig stores it in each game CSV row. `scripts/summarize-rig.py`
 totals these and computes positions/s from the totals. Use
 `fish scripts/interpret_multi_csv.fish` to render the latest summary as HTML,
 or pass a specific summary CSV path.
+
+Opt-in `LOCAL_RIG=1` builds of `ai_minimax` use a separate version-1 rig C&C socket documented
+in `docs/ARCHITECTURE.md`. Keep its protocol and telemetry implementation in
+`src/bots/local_rig.h`, with only small hooks in the bot. CodinGame submission
+builds compile the hooks away; never put rig commands on the game's stdin or
+extra records on move stdout. Forced moves, score events and experiment
+settings are the first uses of this common local protocol. Ordinary multi-rig
+runs keep the plain build and the existing cumulative `@GAME_STATS` collection;
+root-score C&C telemetry would add I/O to every search turn. The one-game
+instrument path sends `INSTRUMENT` over C&C and has the rig write raw
+turn/score CSVs; the bot itself must not open a report file.
 
 Game CSV rows record the rig seed and starting player. The rig passes that
 same seed to `ai_minimax` and, with `--p1-game-seed`, to `orig --seed`. Keep

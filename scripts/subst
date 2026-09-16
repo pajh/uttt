@@ -11,6 +11,9 @@ do
     elif [[ "$line" =~ ^[[:space:]]*#include[[:space:]]+\"instrument.h\"[[:space:]]*$ ]]
     then
 	cat ./src/bots/instrument.h
+    elif [[ "$line" =~ ^[[:space:]]*#include[[:space:]]+\"local_rig.h\"[[:space:]]*$ ]]
+    then
+	cat ./src/bots/local_rig.h
     else
 	echo "$line"
     fi
