@@ -44,6 +44,7 @@ int dfs_failed[2], dfs_failed_primary[2], dfs_failed_narrow[2];
 int timeouts[2], overruns[2], started_scores[2][3];
 uint64_t response_count[2], response_total[2], max_first[2], max_later[2];
 uint64_t game_search_us[2], game_positions[2], game_cache_hits[2];
+uint64_t game_cert_leaf_hits[2], game_cert_internal_hits[2];
 int game_stats_present[2];
 int local_capable[2];
 FILE *scores_csv;
@@ -211,11 +212,15 @@ static void collectGameStats(int player, int read_pipe)
         if (n != 1) break;
         if (ch != '\n') { line[length++] = ch; continue; }
         line[length] = 0;
-        unsigned long long search_us, positions, hits;
-        if (sscanf(line, "@GAME_STATS %llu %llu %llu", &search_us, &positions, &hits) == 3) {
+        unsigned long long search_us, positions, hits, cert_leaf, cert_internal;
+        int fields = sscanf(line, "@GAME_STATS %llu %llu %llu %llu %llu",
+            &search_us, &positions, &hits, &cert_leaf, &cert_internal);
+        if (fields == 5 || fields == 3) {
             game_search_us[player] = search_us;
             game_positions[player] = positions;
             game_cache_hits[player] = hits;
+            game_cert_leaf_hits[player] = fields == 5 ? cert_leaf : 0;
+            game_cert_internal_hits[player] = fields == 5 ? cert_internal : 0;
             game_stats_present[player] = 1;
             return;
         }
@@ -324,6 +329,8 @@ int playGame(int game, int player, char* p0_arg)
     memset(game_search_us, 0, sizeof(game_search_us));
     memset(game_positions, 0, sizeof(game_positions));
     memset(game_cache_hits, 0, sizeof(game_cache_hits));
+    memset(game_cert_leaf_hits, 0, sizeof(game_cert_leaf_hits));
+    memset(game_cert_internal_hits, 0, sizeof(game_cert_internal_hits));
     memset(game_stats_present, 0, sizeof(game_stats_present));
     dfs_failed[0]=dfs_failed[1]=0;
     dfs_failed_primary[0]=dfs_failed_primary[1]=0;
@@ -497,7 +504,7 @@ int playGame(int game, int player, char* p0_arg)
     if (games_csv) {
         const char *win_type = strcmp(reason,"played") ? "forfeit" : board.winner==2 ? "draw" :
             ev_cache[board.overall].p3[board.winner] ? "3iar" : "count";
-        fprintf(games_csv,"%d,%u,%d,%d,%d,%d,%d,%d,%d,%s,%d,%016llx,%s,%d,%d,%d,%d,%d,%d,%d,%llu,%llu,%llu,%d,%llu,%llu,%llu\n",game,game_seed,game_opening.y,game_opening.x,opening_grid,opening_cell,starting_player,board.winner,failure_player,reason,move_no,(unsigned long long)fingerprint,win_type,dfs_failed[0],dfs_failed[1],dfs_failed_primary[0],dfs_failed_narrow[0],dfs_failed_primary[1],dfs_failed_narrow[1],game_stats_present[0],(unsigned long long)game_search_us[0],(unsigned long long)game_positions[0],(unsigned long long)game_cache_hits[0],game_stats_present[1],(unsigned long long)game_search_us[1],(unsigned long long)game_positions[1],(unsigned long long)game_cache_hits[1]);
+        fprintf(games_csv,"%d,%u,%d,%d,%d,%d,%d,%d,%d,%s,%d,%016llx,%s,%d,%d,%d,%d,%d,%d,%d,%llu,%llu,%llu,%llu,%llu,%d,%llu,%llu,%llu,%llu,%llu\n",game,game_seed,game_opening.y,game_opening.x,opening_grid,opening_cell,starting_player,board.winner,failure_player,reason,move_no,(unsigned long long)fingerprint,win_type,dfs_failed[0],dfs_failed[1],dfs_failed_primary[0],dfs_failed_narrow[0],dfs_failed_primary[1],dfs_failed_narrow[1],game_stats_present[0],(unsigned long long)game_search_us[0],(unsigned long long)game_positions[0],(unsigned long long)game_cache_hits[0],(unsigned long long)game_cert_leaf_hits[0],(unsigned long long)game_cert_internal_hits[0],game_stats_present[1],(unsigned long long)game_search_us[1],(unsigned long long)game_positions[1],(unsigned long long)game_cache_hits[1],(unsigned long long)game_cert_leaf_hits[1],(unsigned long long)game_cert_internal_hits[1]);
         fflush(games_csv);
     }
     if (moves_csv) fflush(moves_csv);
@@ -720,7 +727,7 @@ int main(int argc,char* argv[])
         else if (strcmp(argv[i], "--p1-first") == 0) fixed_starting_player = 1;
         else if (strcmp(argv[i], "--games-csv") == 0 && i+1<argc) {
             games_csv = fopen(argv[++i],"w"); if (!games_csv) error("games csv");
-            fputs("game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow,p0_stats_present,p0_search_us,p0_positions_scored,p0_cache_hits,p1_stats_present,p1_search_us,p1_positions_scored,p1_cache_hits\n",games_csv);
+        fputs("game,seed,opening_row,opening_col,opening_grid,opening_cell,starting_player,winner,failure_player,reason,plies,trace_hash,win_type,p0_dfs_failed,p1_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p1_dfs_failed_primary,p1_dfs_failed_narrow,p0_stats_present,p0_search_us,p0_positions_scored,p0_cache_hits,p0_cert_leaf_hits,p0_cert_internal_hits,p1_stats_present,p1_search_us,p1_positions_scored,p1_cache_hits,p1_cert_leaf_hits,p1_cert_internal_hits\n",games_csv);
         }
         else if (strcmp(argv[i], "--moves-csv") == 0 && i+1<argc) {
             moves_csv = fopen(argv[++i],"w"); if (!moves_csv) error("moves csv");

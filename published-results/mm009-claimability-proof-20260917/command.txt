@@ -1,0 +1,1 @@
+./bin/gamerig -G25 --p0 './bin/ai_minimax' --p1 './bin/orig' --p1-game-seed --quiet-bots

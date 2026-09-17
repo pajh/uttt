@@ -1,0 +1,10 @@
+metadata,bot_id,hello
+p0,MM-008-R1MM,MM-008-R1MM
+p1,(no --HELLO response),(no --HELLO response)
+
+worker,games,wins,losses,draws,technical_failures,p0_3iar_wins,p0_count_wins,p0_dfs_failed,p0_dfs_failed_primary,p0_dfs_failed_narrow,p0_stats_games,p0_search_us,p0_positions_scored,p0_cache_hits,p0_cert_leaf_hits,p0_cert_internal_hits,p0_positions_per_second,p1_3iar_wins,p1_count_wins,p1_dfs_failed,p1_dfs_failed_primary,p1_dfs_failed_narrow,p1_stats_games,p1_search_us,p1_positions_scored,p1_cache_hits,p1_cert_leaf_hits,p1_cert_internal_hits,p1_positions_per_second,match_score
+1,25,16,6,3,0,15,1,0,0,0,25,55380502,111462056,10854514,1330462,1049900,2012659,6,0,0,0,0,0,0,0,0,0,0,,0.7
+2,25,20,4,1,0,15,5,0,0,0,25,53942614,110804900,9616581,1285328,640069,2054126,4,0,0,0,0,0,0,0,0,0,0,,0.82
+3,25,20,5,0,0,19,1,0,0,0,25,54101244,112224261,8644304,1666036,348365,2074338,5,0,0,0,0,0,0,0,0,0,0,,0.8
+4,25,17,6,2,0,15,2,0,0,0,25,56165225,114408648,10365286,1429412,624883,2037002,6,0,0,0,0,0,0,0,0,0,0,,0.72
+TOTAL,100,73,21,6,0,64,9,0,0,0,100,219589585,448899865,39480685,5711238,2663217,2044268,21,0,0,0,0,0,0,0,0,0,0,,0.76

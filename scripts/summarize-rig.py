@@ -37,8 +37,8 @@ for row in summary:
         row[f'p{player}_dfs_failed_narrow'] = sum(int(r.get(f'p{player}_dfs_failed_narrow',0)) for r in rows)
         reported = [r for r in rows if r.get(f'p{player}_stats_present') == '1']
         row[f'p{player}_stats_games'] = len(reported)
-        for field in ('search_us', 'positions_scored', 'cache_hits'):
-            row[f'p{player}_{field}'] = sum(int(r[f'p{player}_{field}']) for r in reported)
+        for field in ('search_us', 'positions_scored', 'cache_hits', 'cert_leaf_hits', 'cert_internal_hits'):
+            row[f'p{player}_{field}'] = sum(int(r.get(f'p{player}_{field}', 0)) for r in reported)
         search_us = row[f'p{player}_search_us']
         row[f'p{player}_positions_per_second'] = (
             round(row[f'p{player}_positions_scored'] * 1000000 / search_us)

@@ -52,9 +52,21 @@ u_int32_t eval_count2 = {0};
 
 typedef struct Board9_s
 {
+    /* cell[] is nine local-board indices (0..8, x + 3*y), each stored as a
+     * base-3 code: 0 empty, 1 player 0, 2 player 1.  B3(cell[i]) decodes
+     * that compact code into two one-hot 9-bit masks, where bit x + 3*y is
+     * the local square.  This is separate from x=column,y=row coordinates. */
     u16 cell[9+1];
+    /* overall uses the same base-3 encoding for master ownership. */
     u16 overall;
+    /* One-hot master-cell bits (0..8) that are closed by a local win or draw;
+     * (~overall_free) & 0x1FF therefore selects exactly the still-open
+     * master cells. */
     u16 overall_free;
+    /* A bit is set once local geometry proves player can never claim that
+     * active local board.  These one-hot masks are monotone and derivable
+     * from cell[]; a mover's mark can only newly set the opponent's bit. */
+    u16 cannot_claim[2];
     int winner;
 } Board9;
 
@@ -168,13 +180,30 @@ void resetMoveIt(Moves2* moves) {
 
 typedef struct Evaluation_s
 {
+    /* Counts and winner masks are decoded from one base-3 local-board code;
+     * p*_winners are one-hot local-cell bits, not global x/y coordinates. */
     unsigned char p3[2], p2[2], p1[2];
+    /* Bit p is set iff some local line contains no mark by the opponent.  Its
+     * complement drives the monotone Board9.cannot_claim[p] certificate. */
+    unsigned char can_still_win;
     u16 free,p0_winners,p1_winners;
 } Evaluation;
 
 Evaluation ev_cache[POSS_BOARDS];
 
 uint8_t master_certificate[2][MASTER_CERT_BYTES];
+
+/* Base-4 state contributions used by the claimability-aware certificate.
+ * A state is the sum of owner-0, owner-1 and drawn-cell contributions; all
+ * three masks are disjoint at each call site.  Keeping these conversions
+ * precomputed makes the production proof path a few masks/adds and one
+ * packed-table probe, with no master-line scan or popcount. */
+uint32_t master_owner_state[2][0x200];
+uint32_t master_draw_state[0x200];
+
+/* The master certificate is indexed by nine two-bit statuses.  Build the
+ * owner and drawn portions once at startup so search nodes do not decode nine
+ * master cells just to perform the current-state or virtual-claim lookup. */
 
 #define pos(x,y)  (x + y * 3)
 #define mask(x,y) (1 << (x + y * 3) )
@@ -210,31 +239,45 @@ static int masterCertificateState(unsigned state, int player) {
     return POPCNT(owned[player]) > POPCNT(pessimistic_opponent);
 }
 
-static inline unsigned masterCertificateIndex(const Board9 *board) {
-    Board3 owned = B3(board->overall);
-    unsigned state = 0;
-    for (int cell = 8; cell >= 0; cell--) {
-        unsigned status = 0;
-        unsigned bit = 1u << cell;
-        if (board->overall_free & bit)
-            status = (owned.p[0] & bit) ? 1 : (owned.p[1] & bit) ? 2 : 3;
-        state = (state << 2) | status;
-    }
-    return state;
-}
-
 static inline int masterCertificateLookup(unsigned state, int player) {
     if (state >= MASTER_CERT_STATES || player < 0 || player > 1) return 0;
     return (master_certificate[player][state >> 3] >> (state & 7)) & 1;
 }
 
-/* Virtually claim an active master cell for player, without changing board. */
+static inline unsigned masterClaimabilityState(const Board9 *board, int player,
+                                               unsigned excluded_cell) {
+    Board3 owned = B3(board->overall);
+    u16 owners = (u16)(owned.p[0] | owned.p[1]);
+    /* For this player's certificate, an active cell in cannot_claim[player^1]
+     * is pessimistically a draw: the opponent cannot ever add its master
+     * ownership.  Keep real owners intact, and optionally remove one active
+     * candidate so masterCertificateAfterClaim can add its virtual owner. */
+    u16 draw = (u16)(board->overall_free | board->cannot_claim[player ^ 1]);
+    draw = (u16)(draw & (u16)~owners);
+    if (excluded_cell < 9) draw &= (u16)~(1u << excluded_cell);
+    return master_owner_state[0][owned.p[0]] +
+           master_owner_state[1][owned.p[1]] + master_draw_state[draw];
+}
+
+/* Conservative certificate using local geometric claimability.  Active cells
+ * that the opponent can no longer claim are pessimistically treated as drawn
+ * for the opponent's line/count certificate.  Owners remain owners even when
+ * their master cells are closed. */
+static inline int masterCertificateClaimability(const Board9 *board, int player) {
+    if (!board || player < 0 || player > 1) return 0;
+    return masterCertificateLookup(masterClaimabilityState(board, player, 9), player);
+}
+
+/* Virtually claim an active master cell for player, without changing board.
+ * The candidate is explicitly kept active in the preclaim transform, then
+ * receives player ownership before the packed lookup. */
 static inline int masterCertificateAfterClaim(const Board9 *board, unsigned cell,
                                               int player) {
     if (!board || cell >= 9 || player < 0 || player > 1) return -1;
     unsigned bit = 1u << cell;
     if (board->overall_free & bit) return -1;
-    unsigned state = masterCertificateIndex(board) | ((1u + (unsigned)player) << (2 * cell));
+    unsigned state = masterClaimabilityState(board, player, cell);
+    state += master_owner_state[player][bit];
     return masterCertificateLookup(state, player);
 }
 
@@ -399,6 +442,20 @@ static inline Evaluation _evaluate(u16 board_u16, u16 full_bits)
     evaluate_line(MASK_D1, board, &ev, full_bits);
     evaluate_line(MASK_D2, board, &ev, full_bits);
 
+    /* A player may still claim this local board iff at least one line has no
+     * opponent mark.  This remains a geometric possibility even on a closed
+     * board; overall_free is the separate master-closure fact. */
+    const u16 lines[8] = {MASK_ROW << (0*3),MASK_ROW << (1*3),MASK_ROW << (2*3),
+                          MASK_COL << 0, MASK_COL << 1, MASK_COL << 2,
+                          MASK_D1, MASK_D2};
+    for (int player = 0; player < 2; player++) {
+        for (int i = 0; i < 8; i++)
+            if (!(board.p[player ^ 1] & lines[i])) {
+                ev.can_still_win |= (unsigned char)(1u << player);
+                break;
+            }
+    }
+
     u16 empty_bits = ~full_bits;
 
     for (u16 mask = 1; mask < 1024; mask <<= 1) {
@@ -411,6 +468,14 @@ static inline Evaluation _evaluate(u16 board_u16, u16 full_bits)
     }
 
     return ev;
+}
+
+static inline void updateCannotClaim(Board9 *board, unsigned cell) {
+    if (!board || cell >= 9) return;
+    Evaluation ev = ev_cache[board->cell[cell]];
+    for (int player = 0; player < 2; player++)
+        if (!(ev.can_still_win & (1u << player)))
+            board->cannot_claim[player] |= (u16)(1u << cell);
 }
 
 static inline void setB3(Board3 *board, int x, int y, int player)
@@ -441,6 +506,7 @@ void handleCellWin(Board9 *board, int x, int y, int player)
     {
         set(&board->overall, x, y, player);
         board->cell[pos(x,y)] = (player == 0) ? 0x2671 : 0x4ce2;
+        updateCannotClaim(board, (unsigned)pos(x,y));
         Evaluation ev2 = evalMAC2(board->overall, board->overall_free);
         if (ev2.p3[player] > 0)
         {
@@ -449,6 +515,7 @@ void handleCellWin(Board9 *board, int x, int y, int player)
         }
     } else { // player == 2 ie a draw, blank all cells in this square
         board->cell[pos(x,y)] = 0;
+        updateCannotClaim(board, (unsigned)pos(x,y));
     }
 
     // Game not won by a line of 3 but all squares may be played 
@@ -475,6 +542,9 @@ static inline void set9Simple(Board9 *board, int x, int y, int player) {
     int my = y / 3;
     u16 *mb = &board->cell[pos(mx, my)];
     set(mb, x % 3, y % 3, player);
+    /* This helper intentionally does not close a local board, but it is used
+     * by fixtures and reconstruction paths; keep claimability monotone here. */
+    updateCannotClaim(board, (unsigned)pos(mx, my));
 }
 
 static inline Evaluation set9CB(Board9 *board, u16 cell, u16 bit, int player)
@@ -485,6 +555,7 @@ static inline Evaluation set9CB(Board9 *board, u16 cell, u16 bit, int player)
     Board3 b3 = B3(board->cell[cell]);
     b3.p[player] |= bit;
     board->cell[cell] = B3_2_U16( b3 );
+    updateCannotClaim(board, cell);
 
     Evaluation ev = evalMAC1( board->cell[cell] );
 
@@ -509,6 +580,7 @@ static inline Evaluation set9(Board9 *board, int x, int y, int player)
     int my = y / 3;
     u16 *mb = &board->cell[pos(mx, my)];
     set(mb, x % 3, y % 3, player);
+    updateCannotClaim(board, (unsigned)pos(mx, my));
     Evaluation ev = evalMAC1( *mb );
 
     // check if this cell is full and if so mark it not free
@@ -649,6 +721,19 @@ void initBoardCaches() {
 
     memset(master_certificate, 0, sizeof(master_certificate));
 
+    memset(master_owner_state, 0, sizeof(master_owner_state));
+    memset(master_draw_state, 0, sizeof(master_draw_state));
+    for (unsigned mask = 0; mask < 0x200; mask++) {
+        unsigned place = 1;
+        for (unsigned cell = 0; cell < 9; cell++, place <<= 2) {
+            if (mask & (1u << cell)) {
+                master_owner_state[0][mask] += place;
+                master_owner_state[1][mask] += 2u * place;
+                master_draw_state[mask] += 3u * place;
+            }
+        }
+    }
+
     for (int i=0;i< 0x200; i++) {
         count_cache[i] = __builtin_popcount(i);
         if (i > 0) {
@@ -662,6 +747,7 @@ void initBoardCaches() {
 
     memset(&ev_cache[0],0,sizeof(Evaluation));
     ev_cache[0].free = 9;
+    ev_cache[0].can_still_win = 3;
 
     for( u16 count=0; count< POSS_BOARDS;count++ ) {        
         Board3 b3 =  _genB3(base3);

@@ -17,7 +17,7 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "MM-006-R1MM" /* M = minimax, 006 = experiment counter, R = ratio score. */
+#define HELLO_TEXT "MM-010-R1MM" /* M = minimax, 010 = experiment counter, R = ratio score. */
 
 /* Opening policy: two letters, the outer grid class then the inner cell
  * class.  Each letter is one of M, C or D under the cell numbering
@@ -73,6 +73,7 @@ double getElaspedTime() {
 #include "hashmap.h"
 /* Game totals are reported only to the local rig, after stdin closes. */
 static unsigned long long game_search_us, game_positions, game_cache_hits;
+static unsigned long long game_cert_leaf_hits, game_cert_internal_hits;
 static unsigned long turn_cache_hits;
 
 /* Counts successful cache probes in normal and instrumented builds. */
@@ -123,7 +124,7 @@ int searchExpired(void) {
 }
 
 /* Returns a bit per player when that player still has a possible master line. */
-static unsigned possibleMasterLines(Board9 board) {
+static __attribute__((unused)) unsigned possibleMasterLines(Board9 board) {
     const u16 lines[8] = {7,56,448,73,146,292,273,84};
     Board3 owned = B3(board.overall);
     unsigned possible = 0;
@@ -138,12 +139,37 @@ static unsigned possibleMasterLines(Board9 board) {
 }
 
 /* Proves a count-based winner when remaining boards cannot change the lead. */
-static int countProof(Board9 board, unsigned possible) {
+static __attribute__((unused)) int countProof(Board9 board, unsigned possible) {
     Board3 owned = B3(board.overall);
     int lead = POPCNT(owned.p[0]) - POPCNT(owned.p[1]);
     int remaining = 9 - POPCNT(board.overall_free);
     if (lead > remaining && !(possible & 2)) return 0;
     if (-lead > remaining && !(possible & 1)) return 1;
+    return -1;
+}
+
+/* Current-state master proof.  Local cannot_claim bits tighten the pessimistic
+ * opponent line/count bound; terminal winner/draw handling remains explicit
+ * in evaluateShallow below.  countProof/possibleMasterLines remain lower-bound
+ * reference helpers for regression comparisons. */
+static inline int currentMasterCertificate(const Board9 *board) {
+    if (masterCertificateClaimability(board, 0)) return 0;
+    if (masterCertificateClaimability(board, 1)) return 1;
+    return -1;
+}
+
+/* Return 2 when both packed certificates must be queried, or -1 when the
+ * current proof is unchanged.  A local closure changes overall_free (whether
+ * by win or draw), so both views can change.  Even on an open board, retain
+ * both cannot_claim snapshots: any monotone local-impossibility transition is
+ * proof-relevant and the safe, simple routing is to query both players. */
+static inline int postMoveProofScope(u16 before_overall_free,
+                                     u16 before_cannot0,
+                                     u16 before_cannot1,
+                                     const Board9 *after) {
+    if (before_overall_free != after->overall_free) return 2;
+    if (before_cannot0 != after->cannot_claim[0] ||
+        before_cannot1 != after->cannot_claim[1]) return 2;
     return -1;
 }
 
@@ -279,29 +305,51 @@ static int certifiedImmediateMasterWin(Board9 board, int player, u16 last_bit) {
     return 0;
 }
 
-/* Evaluates a bounded minimax subtree and propagates terminal or timeout values. */
-Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, int timed) {
+/* Evaluates a bounded minimax subtree and propagates terminal or timeout values.
+ * proof_checked says the caller already checked the current proof-relevant
+ * snapshot.  Ordinary local moves often leave that snapshot unchanged, so
+ * avoid repeating even the packed lookup; the public wrapper is the root
+ * entry and checks a pre-existing root proof once. */
+static Score evaluateShallowInternal(Board9 board, int player, u16 cell, u16 bit,
+                                     int depth, int timed, int proof_checked) {
     if (timed && searchExpired()) return (Score){TIMEOUT_SCORE,TIMEOUT_SCORE};
+    if (!proof_checked) {
+        int root_proved = currentMasterCertificate(&board);
+        if (root_proved >= 0)
+            return root_proved == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE};
+    }
+    u16 proof_free = board.overall_free;
+    u16 proof_cannot0 = board.cannot_claim[0];
+    u16 proof_cannot1 = board.cannot_claim[1];
     set9CB(&board, cell, bit, player);
-    if (board.winner >= 0)
-        return board.winner == 2 ? (Score){0,0} :
-            (board.winner == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE});
-    int proved = countProof(board, possibleMasterLines(board));
-    if (proved >= 0)
-        return proved == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE};
+    if (board.winner == 2) return (Score){0,0};
+    int proof_scope = postMoveProofScope(proof_free, proof_cannot0,
+                                         proof_cannot1, &board);
+    if (proof_scope == 2) {
+        int proved = currentMasterCertificate(&board);
+        if (proved >= 0)
+            return proved == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE};
+    }
     unsigned char key[KEY_SIZE];
     searchKey(&board, bit, 1-player, depth, key);
     u32 data;
     if (SEARCH_CACHE_FIND(map,key,&data)) return (Score){data & 65535, data >> 16};
     Score best;
-    if (depth == 0) {
-        int next_player = 1 - player;
-        if (certifiedImmediateMasterWin(board, next_player, bit))
-            best = next_player == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE};
-        else
-            best = scoreBoard(board,cell,bit);
+    int next_player = 1 - player;
+    /* A certified immediate master win is terminal for the side to move,
+       regardless of remaining search depth.  Keep this after the cache probe
+       so cached values retain their existing identity and leaf nodes do not
+       duplicate the certificate check. */
+    if (certifiedImmediateMasterWin(board, next_player, bit)) {
+        if (depth == 0) game_cert_leaf_hits++;
+        else game_cert_internal_hits++;
+        best = next_player == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE};
+        addHMEntry(map,key,((u32)best.p1 << 16) | best.p0);
+        return best;
     }
-    else {
+    if (depth == 0) {
+        best = scoreBoard(board,cell,bit);
+    } else {
         Moves2 moves;
         int target = __builtin_ctz(bit);
         validMoves2(&board, &moves, target%3, target/3);
@@ -309,7 +357,7 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
         best = (Score){0,0};
         u16 next_cell, next_bit;
         while (moveNextCB(&moves,&next_cell,&next_bit)) {
-            Score score = evaluateShallow(board,1-player,next_cell,next_bit,depth-1,timed);
+            Score score = evaluateShallowInternal(board,1-player,next_cell,next_bit,depth-1,timed,1);
             if (score.p0 == TIMEOUT_SCORE) return score;
             int value = scoreForPlayer(score,1-player);
             if (value > best_score) { best_score = value; best = score; }
@@ -318,6 +366,10 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
     }
     addHMEntry(map,key,((u32)best.p1 << 16) | best.p0);
     return best;
+}
+
+Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, int timed) {
+    return evaluateShallowInternal(board, player, cell, bit, depth, timed, 0);
 }
 
 enum RootProof {
@@ -349,6 +401,13 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
         roots.count++;
     }
 
+    /* The root has no evaluated parent.  Check its current proof exactly once
+       per turn; every legal continuation preserves an already-proved master
+       winner, so any legal root move is sufficient. */
+    int root_proved = currentMasterCertificate(board);
+    if (root_proved >= 0 && roots.count > 0)
+        return roots.moves[0].move;
+
     /* Four plies is the safety floor: current timing evidence says it always
        completes, while the old two-ply pass only consumed time.  There is no
        arbitrary depth ceiling.  Keep adding two plies until the clock stops
@@ -374,8 +433,8 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
 
             u16 cell, bit;
             pos2cell(root->move,&cell,&bit);
-            Score score = evaluateShallow(
-                *board,0,cell,bit,target_plies-1,1
+            Score score = evaluateShallowInternal(
+                *board,0,cell,bit,target_plies-1,1,1
             );
             if (score.p0 == TIMEOUT_SCORE) {
                 time_expired = 1;
@@ -578,8 +637,9 @@ int main(int argc,char* argv[])
         fflush(stdout);
     }
     if (getenv("CG_LOCAL_STATS")) {
-        printf("@GAME_STATS %llu %llu %llu\n",
-            game_search_us, game_positions, game_cache_hits);
+        printf("@GAME_STATS %llu %llu %llu %llu %llu\n",
+            game_search_us, game_positions, game_cache_hits,
+            game_cert_leaf_hits, game_cert_internal_hits);
         fflush(stdout);
     }
     destroyHM(map);    
