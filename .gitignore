@@ -9,18 +9,11 @@ gmon.out
 *.log
 /.ai_minimax.c.swp
 /__pycache__/
-/heat-game*.csv
-/heat-scores.csv
-/heatmap.html
-/debug-game/
+/published-results/
 /reports/
 /work/
 
 # Raw benchmark runs (GitHub Actions uploads these as artifacts)
 /run-*/
-/results/
-/starting-moves/
-/starting-classes/
-/artifacts/
 /latest-summary*.csv
 /latest-games*.csv
