@@ -134,3 +134,33 @@ Tool usage is expensive.  Work deliberately:
   edit directly and verify it proportionately.
 - Reserve heavyweight investigation and long benchmark runs for a named
   hypothesis with a clear success criterion.
+
+### Experimental delegation workflow
+
+- For bounded routine coding and repository operations, the primary design/review
+  agent should try a `gpt-5.6-luna` sub-agent with zero inherited conversation
+  turns and a short, self-contained brief covering scope, relevant files,
+  constraints, verification, and stop conditions. Do not provide broad history.
+- Because the workspace is shared, avoid simultaneous edits to the same files;
+  the primary agent reviews the resulting diff and evidence. Keep open-ended
+  design and algorithm discussion with the primary agent.
+- Do not run long match batches, commit, push, or make external changes unless
+  specifically authorized. Evaluate the trial by correctness, rework, and
+  available usage or elapsed-time evidence; do not claim guaranteed quota
+  savings.
+- After a change to `ai_minimax`, run `fish scripts/check-candidate.fish` as the
+  quick technical gate. It is not a strength test. Add one or two targeted
+  assertions for the changed behaviour or position whenever possible; the
+  existing unit suite alone does not establish that a heuristic improved.
+- Use the reusable, zero-history Luna briefs in `scripts/README.md` for three
+  bounded jobs: prepare an experiment and its evidence, operate an explicitly
+  requested GitHub run, or gather and summarize evidence read-only. Give the
+  worker the hypothesis, exact files, expected bot ID, seed/game policy, and
+  stop conditions. The primary agent owns experimental interpretation and
+  reviews diffs and results before recommending keep/revert.
+- A request to *plan* an experiment does not authorize a run. A request to run
+  on GitHub authorizes dispatch with the stated parameters, but not a blind
+  commit or push of unrelated changes. Check the staged/dirty diff, branch,
+  remote, and launcher preconditions; stop and report the exact mismatch if
+  the required source is not already committed and pushed. Commit/push only
+  when separately requested, and scope those operations to reviewed files.

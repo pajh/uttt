@@ -1,5 +1,48 @@
 # Run and report scripts
 
+`check-candidate.fish` is the quick post-change reasonableness check. From the
+repository root, run `fish scripts/check-candidate.fish`. It runs the tests,
+builds the local rig and both bots, checks the `--HELLO` response, generates
+and syntax-checks the submission under 100,000 bytes, then plays two seeded
+games against `orig` with alternating starters. Any non-played result is a
+technical failure. Logs and CSVs are kept in the ignored `work/check-candidate/`
+directory; this is deliberately a smoke test, not a strength benchmark.
+
+## Small-context Luna handoffs
+
+The design/review agent keeps the strategic discussion. For a bounded job,
+start a `gpt-5.6-luna` sub-agent with **zero inherited conversation turns** and
+give it only the filled-in brief below. It shares this workspace; the design
+agent reviews its diff and evidence. These are task briefs, not commands to
+launch a run automatically.
+
+**Prepare/check an experiment:** “Hypothesis: [one sentence]. Bot ID: [ID].
+Files in scope: [paths]. Implement [exact change] and a targeted assertion for
+[position/behaviour]. Run `fish scripts/check-candidate.fish`; if that passes,
+run [explicit local comparison command and count, if authorized]. Record the
+command, seeds, identity, W/L/D, technical failures, and decision evidence in
+`progress.md`. Stop on an unexpected diff or failed check. Do not commit, push,
+or launch GitHub.” The design agent must choose the hypothesis and interpret
+whether the result supports it; the worker must not silently tune several
+variables until a score looks good.
+
+**Operate an authorized GitHub run:** “Launch [N] games of bot [ID] from
+[branch] against `orig`, using `fish scripts/start-github-1000.fish [N]`.
+First inspect the exact changed files, current HEAD, upstream, and the
+launcher's preconditions. Do not commit or push unless separately authorized;
+if the required run inputs are not committed and pushed, report the files and
+stop. Return the request ID/run link and the exact status/retrieval commands.
+Do not repeatedly poll or claim results before completion.” Once the run has
+finished, a separately requested retrieval uses
+`fish scripts/retrieve-github-latest-1000.fish` and checks bot IDs, count,
+technical failures, and provenance before comparing reports.
+
+**Gather evidence read-only:** “Question: [specific question]. Sources:
+[report/CSV/game/position paths]. Read only the narrow fields needed; do not
+edit bot code, trigger matches, or regenerate reports. Return the identifiers,
+seed/starting player, exact figures or board observations, uncertainty, and
+the next discriminating test in at most a short paragraph or small table.”
+
 `multi-rig.fish` plays `ai_minimax` against `orig` on separate seed ranges.
 The configuration block at the top names both bot commands, the number of
 simultaneous workers, and games per worker. Its local default is 4 × 25.
