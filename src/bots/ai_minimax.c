@@ -17,7 +17,7 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "MM-004-R1MM" /* M = minimax, 004 = experiment counter, R = ratio score. */
+#define HELLO_TEXT "MM-006-R1MM" /* M = minimax, 006 = experiment counter, R = ratio score. */
 
 /* Opening policy: two letters, the outer grid class then the inner cell
  * class.  Each letter is one of M, C or D under the cell numbering
@@ -256,6 +256,29 @@ Score scoreBoard(Board9 board, u16 last_cell, u16 last_bit) {
     return (Score){strength[0],strength[1]};
 }
 
+/* At a depth-zero leaf, prove an immediate master win available to the side
+ * to move.  last_bit selects the next local board unless that board is
+ * already closed, in which case the rules allow any open local board. */
+static int certifiedImmediateMasterWin(Board9 board, int player, u16 last_bit) {
+    int target = __builtin_ctz(last_bit);
+    u16 candidate_boards = 0;
+    if (board.overall_free & (1u << target)) {
+        candidate_boards = (u16)(~board.overall_free) & 0x1FF;
+    } else {
+        candidate_boards = (u16)(1u << target);
+    }
+    for (int cell = 0; cell < 9; cell++) {
+        u16 cell_bit = (u16)(1u << cell);
+        if (!(candidate_boards & cell_bit) || (board.overall_free & cell_bit))
+            continue;
+        Evaluation ev = ev_cache[board.cell[cell]];
+        u16 winning = player ? ev.p1_winners : ev.p0_winners;
+        if (winning && masterCertificateAfterClaim(&board, (unsigned)cell, player))
+            return 1;
+    }
+    return 0;
+}
+
 /* Evaluates a bounded minimax subtree and propagates terminal or timeout values. */
 Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, int timed) {
     if (timed && searchExpired()) return (Score){TIMEOUT_SCORE,TIMEOUT_SCORE};
@@ -271,7 +294,13 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
     u32 data;
     if (SEARCH_CACHE_FIND(map,key,&data)) return (Score){data & 65535, data >> 16};
     Score best;
-    if (depth == 0) best = scoreBoard(board,cell,bit);
+    if (depth == 0) {
+        int next_player = 1 - player;
+        if (certifiedImmediateMasterWin(board, next_player, bit))
+            best = next_player == 0 ? (Score){TERMINAL_SCORE,0} : (Score){0,TERMINAL_SCORE};
+        else
+            best = scoreBoard(board,cell,bit);
+    }
     else {
         Moves2 moves;
         int target = __builtin_ctz(bit);

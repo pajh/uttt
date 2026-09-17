@@ -9,9 +9,63 @@ static int reference_win(unsigned bits) {
     return 0;
 }
 
+/* Deliberately independent 4-state reference for the master certificate. */
+static int reference_master_certificate(unsigned state, int player) {
+    static const unsigned lines[] = {7,56,448,73,146,292,273,84};
+    unsigned owned[2] = {0, 0}, active = 0, value = state;
+    for (int cell = 0; cell < 9; cell++, value >>= 2) {
+        unsigned status = value & 3u;
+        if (status == 0) active |= 1u << cell;
+        else if (status == 1 || status == 2) owned[status - 1] |= 1u << cell;
+    }
+    for (int i = 0; i < 8; i++)
+        if ((owned[player] & lines[i]) == lines[i]) return 1;
+    unsigned opponent = owned[player ^ 1] | active;
+    for (int i = 0; i < 8; i++)
+        if ((opponent & lines[i]) == lines[i]) return 0;
+    return __builtin_popcount(owned[player]) > __builtin_popcount(opponent);
+}
+
 int main(void) {
     initBoardCaches();
     initScoringCache();
+    /* Exhaustively validate both packed certificate planes and virtual claims. */
+    for (unsigned state = 0; state < MASTER_CERT_STATES; state++) {
+        Board9 master = {.winner = -1};
+        Board3 owners = {0};
+        unsigned value = state;
+        for (int cell = 0; cell < 9; cell++, value >>= 2) {
+            unsigned status = value & 3u;
+            if (status != 0) {
+                master.overall_free |= 1u << cell;
+                if (status == 1) owners.p[0] |= 1u << cell;
+                else if (status == 2) owners.p[1] |= 1u << cell;
+            }
+        }
+        master.overall = B3_2_U16(owners);
+        for (int player = 0; player < 2; player++) {
+            int expected = reference_master_certificate(state, player);
+            assert(masterCertificateLookup(state, player) == expected);
+            for (int cell = 0; cell < 9; cell++) {
+                if (!(master.overall_free & (1u << cell))) {
+                    unsigned claimed = state | ((1u + (unsigned)player) << (2 * cell));
+                    assert(masterCertificateAfterClaim(&master, cell, player) ==
+                           reference_master_certificate(claimed, player));
+                }
+            }
+        }
+        assert(masterCertificateAfterClaim(&master, 0, -1) == -1);
+        assert(masterCertificateAfterClaim(&master, 9, 0) == -1);
+        if (master.overall_free & 1u)
+            assert(masterCertificateAfterClaim(&master, 0, 0) == -1);
+    }
+    /* Focused direct-line, pessimistic-opponent, count, tie, and draw cases. */
+    assert(reference_master_certificate(1 | (1 << 2) | (1 << 4), 0));
+    assert(!reference_master_certificate(2 | (2 << 2) | (2 << 4), 0));
+    assert(reference_master_certificate((1u << 0) | (1u << 2) | (1u << 6) |
+                                       (1u << 8) | (3u << 4) | (3u << 10) |
+                                       (3u << 12) | (3u << 14) | (3u << 16), 0));
+    assert(!reference_master_certificate(1 | (2 << 2) | (1 << 4), 0));
     for (int code=0;code<POSS_BOARDS;code++) {
         unsigned players[2]={0,0}; int value=code;
         for (int i=0;i<9;i++,value/=3) if (value%3) players[value%3-1] |= 1u<<i;
@@ -87,7 +141,8 @@ int main(void) {
     set9Simple(&b,6,0,0);set9Simple(&b,7,1,0);
     clearHM(map);
     Score short_score=evaluateShallow(b,0,2,4,1,0);
-    assert(short_score.p0!=TERMINAL_SCORE);
+    /* The leaf now proves the next player's winning reply directly. */
+    assert(short_score.p0==TERMINAL_SCORE && short_score.p1==0);
     clearHM(map);
     won=evaluateShallow(b,0,2,4,3,0);
     assert(won.p0==TERMINAL_SCORE && won.p1==0);
@@ -185,6 +240,24 @@ int main(void) {
     assert(b.winner==-1 && liveMasterWinningCells(b,0)==2);
     assert(liveMasterWinningCells(b,1)==0);
     count_scale=1;
+    /* Leaf certificate: forced/open routing, both players, and closed cells. */
+    b=(Board9){.winner=-1};
+    handleCellWin(&b,0,0,0); handleCellWin(&b,1,0,0);
+    set9Simple(&b,6,1,0); set9Simple(&b,7,1,0);
+    assert(!certifiedImmediateMasterWin(b,0,1u<<5)); /* forced board 5 */
+    assert(certifiedImmediateMasterWin(b,0,1u<<0));  /* board 0 is closed */
+    clearHM(map);
+    Score next_p0=evaluateShallow(b,1,3,1u<<2,0,0);
+    assert(next_p0.p0==TERMINAL_SCORE && next_p0.p1==0);
+    handleCellWin(&b,2,0,1);                         /* candidate is closed */
+    assert(!certifiedImmediateMasterWin(b,0,1u<<0));
+    b=(Board9){.winner=-1};
+    handleCellWin(&b,0,0,1); handleCellWin(&b,1,0,1);
+    set9Simple(&b,6,1,1); set9Simple(&b,7,1,1);
+    assert(certifiedImmediateMasterWin(b,1,1u<<0));
+    clearHM(map);
+    Score next_p1=evaluateShallow(b,0,3,1u<<2,0,0);
+    assert(next_p1.p0==0 && next_p1.p1==TERMINAL_SCORE);
     destroyHM(map);
     puts("All board states, move conversion, endings, cache identity, deadline fallback and terminal search passed.");
 }

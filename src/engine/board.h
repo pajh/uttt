@@ -25,6 +25,13 @@
 
 #define POSS_BOARDS 19682 + 1
 
+/* A conservative master-board win certificate, indexed by nine base-4
+ * statuses: active=0, player 0=1, player 1=2, drawn=3.  This is not a full
+ * Ultimate Tic-Tac-Toe solve: it only proves wins by a master line or by the
+ * pessimistic active-cell/count test documented by masterCertificateState(). */
+#define MASTER_CERT_STATES (1u << 18) /* 4^9 */
+#define MASTER_CERT_BYTES (MASTER_CERT_STATES / 8)
+
 typedef uint16_t u16;
 //
 typedef struct Pos_s
@@ -167,10 +174,69 @@ typedef struct Evaluation_s
 
 Evaluation ev_cache[POSS_BOARDS];
 
+uint8_t master_certificate[2][MASTER_CERT_BYTES];
+
 #define pos(x,y)  (x + y * 3)
 #define mask(x,y) (1 << (x + y * 3) )
 #define B3(u) cache[u]
 #define B3_2_U16(X) rcache[X.p[0]] + 2 * rcache[X.p[1]]
+
+static const unsigned master_certificate_lines[] = {
+    7, 56, 448, 73, 146, 292, 273, 84
+};
+
+/* Reference predicate used only while constructing the packed certificate. */
+static int masterCertificateState(unsigned state, int player) {
+    unsigned owned[2] = {0, 0};
+    unsigned active = 0;
+    unsigned value = state;
+    for (int cell = 0; cell < 9; cell++, value >>= 2) {
+        unsigned status = value & 3u;
+        if (status == 0) active |= 1u << cell;
+        else if (status == 1 || status == 2) owned[status - 1] |= 1u << cell;
+    }
+
+    for (int line = 0; line < 8; line++) {
+        unsigned mask = master_certificate_lines[line];
+        if ((owned[player] & mask) == mask) return 1;
+    }
+
+    int opponent = player ^ 1;
+    unsigned pessimistic_opponent = owned[opponent] | active;
+    for (int line = 0; line < 8; line++) {
+        unsigned mask = master_certificate_lines[line];
+        if ((pessimistic_opponent & mask) == mask) return 0;
+    }
+    return POPCNT(owned[player]) > POPCNT(pessimistic_opponent);
+}
+
+static inline unsigned masterCertificateIndex(const Board9 *board) {
+    Board3 owned = B3(board->overall);
+    unsigned state = 0;
+    for (int cell = 8; cell >= 0; cell--) {
+        unsigned status = 0;
+        unsigned bit = 1u << cell;
+        if (board->overall_free & bit)
+            status = (owned.p[0] & bit) ? 1 : (owned.p[1] & bit) ? 2 : 3;
+        state = (state << 2) | status;
+    }
+    return state;
+}
+
+static inline int masterCertificateLookup(unsigned state, int player) {
+    if (state >= MASTER_CERT_STATES || player < 0 || player > 1) return 0;
+    return (master_certificate[player][state >> 3] >> (state & 7)) & 1;
+}
+
+/* Virtually claim an active master cell for player, without changing board. */
+static inline int masterCertificateAfterClaim(const Board9 *board, unsigned cell,
+                                              int player) {
+    if (!board || cell >= 9 || player < 0 || player > 1) return -1;
+    unsigned bit = 1u << cell;
+    if (board->overall_free & bit) return -1;
+    unsigned state = masterCertificateIndex(board) | ((1u + (unsigned)player) << (2 * cell));
+    return masterCertificateLookup(state, player);
+}
 
 // static inline u16 pc(u16 mask) {
 //     if (mask > 0x1FF) {
@@ -581,6 +647,8 @@ static inline Board3 _genB3(int const a[]) {
 void initBoardCaches() {
     int base3[10] = {0};
 
+    memset(master_certificate, 0, sizeof(master_certificate));
+
     for (int i=0;i< 0x200; i++) {
         count_cache[i] = __builtin_popcount(i);
         if (i > 0) {
@@ -604,6 +672,13 @@ void initBoardCaches() {
         _inc3(base3,0);
         if (count > 0) {
             ev_cache[count] = _evaluate(count,0);
+        }
+    }
+
+    for (unsigned state = 0; state < MASTER_CERT_STATES; state++) {
+        for (int player = 0; player < 2; player++) {
+            if (masterCertificateState(state, player))
+                master_certificate[player][state >> 3] |= (uint8_t)(1u << (state & 7));
         }
     }
 }
