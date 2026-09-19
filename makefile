@@ -1,5 +1,9 @@
 CC = gcc
 CFLAGS ?= -Wall -g
+CFLAGS += -std=c17
+ifeq ($(BOARD_ASSERTS),1)
+CFLAGS += -DBOARD_ASSERTS=1
+endif
 LOCAL_ARCH ?= -march=native
 LOCAL_RIG ?= 0
 ENGINE_DIR := src/engine

@@ -30,10 +30,6 @@ Sources: [challenge](https://www.codingame.com/multiplayer/bot-programming/tic-t
 | test.c | Coordinate conversion and winning-square table diagnostics. Does not exercise moveNext(), so misses the key iterator defect. Needs header/include cleanup for modern builds. |
 | hashtest.c | Hash-map experiment; missing the timing function required by current hashmap.h. |
 | simd_test.c | SIMD memory-fill benchmark, rather than a game bot. |
-| profile, gmon.out | Profiling script and recovered profile data. Script assumes bin/ and contains a grpof.out filename typo. |
-| weights*.txt, best_weights*.txt | Six heuristic weights and saved tuning results; best_weights.org.txt has only five integer weights before its percentage, so does not match the current loader's format. |
-| notes.txt, initboard.txt, moves.txt | Experimental notes and board/move fixtures. notes.txt records an opening sweep favouring (0,1), explaining orig.c's forced opening. |
-| helloworld.cpp, test | Starter/sample source and a recovered executable; not evidence of a complete working rig. |
 
 ## Submission merger survives
 

@@ -4,7 +4,7 @@
 *.out
 gmon.out
 /test
-
+__pycache__
 # Local diagnostics and generated replays
 *.log
 /.ai_minimax.c.swp

@@ -264,29 +264,6 @@ int main(void) {
     b=(Board9){.winner=-1};m=(Moves2){0};pushMove(&m,(Pos){8,8});pushMove(&m,(Pos){7,8});
     start_time=get_gtod_clock_time();search_deadline=-1;
     Pos fallback=evaluateMovesShallowTimed(&b,&m);assert(isLegalMove(fallback.x,fallback.y,&m));
-    /* The post-move guard ignores overall's base-3 encoding (ownership only
-       changes when overall_free closes a cell): unchanged proof inputs skip,
-       either monotone cannot_claim change or closure checks both planes. */
-    Board9 proof_before=b, proof_after=b;
-    assert(postMoveProofScope(proof_before.overall_free,
-                              proof_before.cannot_claim[0],
-                              proof_before.cannot_claim[1], &proof_after) == -1);
-    proof_after.cannot_claim[0] ^= 1u;
-    assert(postMoveProofScope(proof_before.overall_free,
-                              proof_before.cannot_claim[0],
-                              proof_before.cannot_claim[1], &proof_after) == 2);
-    proof_after=proof_before; proof_after.cannot_claim[1] ^= 1u;
-    assert(postMoveProofScope(proof_before.overall_free,
-                              proof_before.cannot_claim[0],
-                              proof_before.cannot_claim[1], &proof_after) == 2);
-    proof_after=proof_before; proof_after.overall_free ^= 1u;
-    assert(postMoveProofScope(proof_before.overall_free,
-                              proof_before.cannot_claim[0],
-                              proof_before.cannot_claim[1], &proof_after) == 2);
-    proof_after=proof_before; proof_after.overall ^= 1u;
-    assert(postMoveProofScope(proof_before.overall_free,
-                              proof_before.cannot_claim[0],
-                              proof_before.cannot_claim[1], &proof_after) == -1);
     /* A pre-existing root certificate is checked once and returns a legal
        root move without rechecking every candidate/depth iteration. */
     b=(Board9){.winner=-1};

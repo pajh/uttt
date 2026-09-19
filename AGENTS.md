@@ -49,6 +49,22 @@ not a strength improvement until it has a recorded, reproducible comparison.
 - The local referee belongs in `src/rig/`.
 - `src/legacy/` is historical evidence.  Do not refactor or "clean up" it
   while experimenting with the current bot; preserve it as the benchmark.
+- New board code targets C17. The aliases `u8`, `i8`, `u16`, and `i16` are
+  defined once in `src/engine/support.h`, mapped to matching `<stdint.h>`
+  exact-width types. `uint` is not a standard C type, and no GCC pragma
+  selects the C language dialect.
+- Prefer `bool` for predicate returns, boolean parameters, and boolean
+  state/local variables. `src/engine/support.h` is the sole home of shared
+  generic aliases and generic assertion support. `BOARD_ASSERTS` is undefined
+  or 0 by default and can be enabled with `#define BOARD_ASSERTS 1` before
+  including `support.h` or `make BOARD_ASSERTS=1`. Disabled assertions expand
+  to no-evaluation `((void)0)`; assertion conditions must be side-effect-free.
+- In production code, prefer readable semantic questions and names, or
+  documented small helpers, for bit tricks. Explain non-obvious operations in
+  comments. Consider `__builtin_popcount` for bit counts and `__builtin_ctz`
+  for the index of a known-nonzero bit (`ctz(0)` is undefined); do not apply
+  blanket intrinsic substitutions, and require measurement for performance
+  claims.
 - Read `docs/ARCHITECTURE.md` before changing a subsystem, and add comments
   for invariants, units, coordinate conversion, cache identity and deadline
   behaviour—not narration of obvious code.
