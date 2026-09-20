@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* searchKey() in ai_minimax.c owns this byte-level key format. */
 #define KEY_SIZE 26

@@ -10,9 +10,9 @@ int main(void)
 {
     for (mask9 mask = 0; mask <= M111111111; mask++) {
         bool original_line = has_three_in_a_row(mask);
-        bool cached_line = has_three_in_a_row_vcache(mask);
+        bool cached_line = _has_three_in_a_row_vcache(mask);
         bool original_still = still_win(mask);
-        bool cached_still = still_win_vcache(mask);
+        bool cached_still = _still_win_vcache(mask);
         if (original_line != cached_line || original_still != cached_still) {
             fprintf(stderr, "mask=%03x line=%d/%d still=%d/%d\n", mask,
                     original_line, cached_line, original_still, cached_still);
@@ -23,18 +23,18 @@ int main(void)
         Board2 ordinary = {0};
         Board2 blocked = {0};
         Board2 local_win = {0};
-        if (board2_play(&ordinary, 0, 1, 0)) {
+        if (board2_play(&ordinary, (Move){0, 1}, 0)) {
             fprintf(stderr, "ordinary move incorrectly changed proof input\n");
             return 1;
         }
         blocked.marks[0][0] = 0x063;
-        if (!board2_play(&blocked, 0, 0x010, 0) ||
+        if (!board2_play(&blocked, (Move){0, 0x010}, 0) ||
             !(blocked.cannot_claim[1] & 1u)) {
             fprintf(stderr, "new cannot_claim bit was not reported\n");
             return 1;
         }
         local_win.marks[0][0] = 0x003;
-        if (!board2_play(&local_win, 0, 4, 0) ||
+        if (!board2_play(&local_win, (Move){0, 4}, 0) ||
             !(local_win.marks[0][UBOARD] & 1u)) {
             fprintf(stderr, "local U closure was not reported\n");
             return 1;
@@ -85,8 +85,8 @@ int main(void)
             for (u8 turn = 0; turn < 9; turn++) {
                 u8 player = (u8)(turn & 1u);
                 u8 local = player ? p1_draw[turn / 2] : p0_draw[turn / 2];
-                (void)board2_play(&actual_draw, cell,
-                                  (onehot9)(1u << local), player);
+                (void)board2_play(&actual_draw,
+                                  (Move){cell, (onehot9)(1u << local)}, player);
             }
         }
         if (actual_draw.winner != BOARD2_DRAW ||

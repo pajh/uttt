@@ -12,7 +12,7 @@ __pycache__
 /published-results/
 /reports/
 /work/
-
+/.vscode/
 # Raw benchmark runs (GitHub Actions uploads these as artifacts)
 /run-*/
 /latest-summary*.csv

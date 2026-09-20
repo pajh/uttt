@@ -182,6 +182,25 @@ adopted by default. Defining `BOARD2_USE_VCACHE=1` at compile time switches the
 three existing `board2_play` rule checks to those variants for A/B measurement;
 the default keeps the original expressions and scan.
 
+## Ideas bank
+
+### Depth-selective transposition storage
+
+The main prospective value of a search transposition table is avoiding descent
+through a subtree that has already been evaluated at a sufficient remaining
+depth. Memoizing the cheapest depth-zero score calculations may instead cost
+more than recomputing them, especially now that Board2 evaluation primitives are
+fast relative to hashing, key construction, and memory access.
+
+If a transposition table is added to the Board2 negamax, measure a policy that
+does not probe or store at the lowest remaining depth. This also avoids flooding
+the table at the widest level of the tree, where the search produces the most
+keys with the least reusable work behind each value. Treat the cutoff depth as
+an experimental lever: compare total nodes, heuristic leaf evaluations, table
+traffic, completed search depth, and wall-clock cost before selecting it.
+Correct cache identity and sufficient stored search depth remain mandatory for
+every entry that is used.
+
 `winning_cells_simd(mine, opponent)` is an additional unconnected SSE2
 experiment. It returns empty cells that complete a local line, and has an
 exhaustive test against an independent Python reference; no search path uses

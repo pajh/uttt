@@ -204,7 +204,7 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                      (onehot9)(1u << (opening % 9u))};
         bool legal[81] = {true};
         (void)legal;
-        board2_play(&board, move.subboard, move.local_bit, player);
+        board2_play(&board, move, player);
         reference_play(&ref, move.subboard, move.local_bit, player, game, ply);
         check_state(&board, &ref, game, ply);
         hash = hash_state(hash, &board, player, move);
@@ -275,7 +275,7 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                 (unsigned)__builtin_ctz((unsigned)chosen.local_bit);
             CHECK(game, ply, chosen_index < 81 && legal[chosen_index],
                   "chosen move not independently legal");
-            board2_play(&board, chosen.subboard, chosen.local_bit, player);
+            board2_play(&board, chosen, player);
             reference_play(&ref, chosen.subboard, chosen.local_bit, player,
                            game, ply);
             check_state(&board, &ref, game, ply);

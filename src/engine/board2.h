@@ -86,6 +86,65 @@ typedef struct ValidMoves_s {
     };
 } ValidMoves;
 
+typedef struct Board2CellLines_s {
+    mask9 lines[4];
+    u8 count;
+} Board2CellLines;
+
+/* Convert a 0..8 index to a onehot9 bit. */
+static inline onehot9 onehot9_from_index(u8 index)
+{
+    ASSERT(index < 9);
+    return (onehot9)(1u << index);
+}
+
+static const Board2CellLines board2_cell_lines[9] = {
+    /* 0: top-left */
+    {{0x007u, 0x049u, 0x111u, 0x000u}, 3},
+
+    /* 1: top-middle */
+    {{0x007u, 0x092u, 0x000u, 0x000u}, 2},
+
+    /* 2: top-right */
+    {{0x007u, 0x124u, 0x054u, 0x000u}, 3},
+
+    /* 3: middle-left */
+    {{0x038u, 0x049u, 0x000u, 0x000u}, 2},
+
+    /* 4: centre */
+    {{0x038u, 0x092u, 0x111u, 0x054u}, 4},
+
+    /* 5: middle-right */
+    {{0x038u, 0x124u, 0x000u, 0x000u}, 2},
+
+    /* 6: bottom-left */
+    {{0x1C0u, 0x049u, 0x054u, 0x000u}, 3},
+
+    /* 7: bottom-middle */
+    {{0x1C0u, 0x092u, 0x000u, 0x000u}, 2},
+
+    /* 8: bottom-right */
+    {{0x1C0u, 0x124u, 0x111u, 0x000u}, 3},
+};
+
+// Opponent player 0->1, 1->0
+static inline u8 opponent(u8 player)
+{
+    ASSERT(player < 2);
+    return (u8)(player ^ 1u);
+}
+
+static inline mask9 board2_owned(const Board2 *board, u8 player)
+{
+    ASSERT(board != NULL);
+    ASSERT(player < 2);
+
+    return (mask9)(
+        board->marks[player][UBOARD]
+        & (mask9)~board->marks[opponent(player)][UBOARD]
+    );
+}
+
 /* *remaining is a nonzero mask9; return its lowest set bit and remove exactly
  * that bit.  The AND with the two's-complement negation isolates the lowest
  * set bit without scanning the mask. */
@@ -197,7 +256,7 @@ static const uint64_t board2_still_win_vcache_table[8] = {
  * 0/1/2, and 0x004 selects the anti-diagonal start at 2.  TODO: evaluate
  * later whether using the last move's bit improves speed; make no assumption
  * about that until measured. */
-static inline bool has_three_in_a_row(mask9 m)
+static inline bool _has_three_in_a_row(mask9 m)
 {
     ASSERT_MASK9(m);
     const mask9 rows = m & (m >> 1) & (m >> 2) & 0x049;
@@ -209,16 +268,27 @@ static inline bool has_three_in_a_row(mask9 m)
 
 /* Experimental lookup equivalent of has_three_in_a_row; the two-level index
  * selects the precomputed truth-table bit for this nine-bit mask. */
-static inline bool has_three_in_a_row_vcache(mask9 m)
+static inline bool _has_three_in_a_row_vcache(mask9 m)
 {
     ASSERT_MASK9(m);
     return (board2_has_three_in_a_row_vcache_table[m >> 6] >> (m & 63)) & 1;
 }
 
+// Wrapper to use the vcache if enabled
+static inline bool has_three_in_a_row(mask9 m)
+{
+#if defined(BOARD2_USE_VCACHE) && BOARD2_USE_VCACHE
+    return _has_three_in_a_row_vcache(m);
+#else
+    return _has_three_in_a_row(m);
+#endif
+}
+
+
 /* A player can still claim this local board iff no line is blocked by the
  * opponent.  The board may already be closed at the master level; this is a
  * geometric fact used by the monotone cannot_claim masks. */
-static inline bool still_win(mask9 opponent_marks)
+static inline bool _still_win(mask9 opponent_marks)
 {
     ASSERT_MASK9(opponent_marks);
     for (u8 i = 0; i < 8; i++) {
@@ -230,12 +300,21 @@ static inline bool still_win(mask9 opponent_marks)
 
 /* Experimental lookup equivalent of still_win; the table bit means some
  * complete line has no mark from the opponent. */
-static inline bool still_win_vcache(mask9 opponent_marks)
+static inline bool _still_win_vcache(mask9 opponent_marks)
 {
     ASSERT_MASK9(opponent_marks);
     return (board2_still_win_vcache_table[opponent_marks >> 6] >>
             (opponent_marks & 63)) & 1;
 }
+
+static inline bool still_win(mask9 opponent_marks) {
+#if defined(BOARD2_USE_VCACHE) && BOARD2_USE_VCACHE
+    return _still_win_vcache(opponent_marks);
+#else
+    return _still_win(opponent_marks);
+#endif
+}
+
 
 typedef enum Board2CertificateResult_e {
     BOARD2_NO_CERTIFICATE = 0,
@@ -292,6 +371,24 @@ static inline Board2CertificateResult certified_result(const Board2 *board,
     return BOARD2_NO_CERTIFICATE;
 }
 
+// Call after a uboard cell is won or drawn.
+// checks is this closes all uboard cells and if so resolves the game
+// to a count win or a draw.
+// returns true if the game is closed
+static inline bool check_and_close_uboard(Board2 *board) {
+    mask9 closed = board->marks[0][UBOARD] | board->marks[1][UBOARD];
+    if (closed == M111111111) {
+        u8 p0 = (u8)__builtin_popcount(board->marks[0][UBOARD]);
+        u8 p1 = (u8)__builtin_popcount(board->marks[1][UBOARD]);
+        if (p0 == p1) {
+            board->winner = 3;
+        } else {
+            board->winner = (i8)(p0 > p1) ? (0+1) : (1+1); // p0 win is 1, p1 win is 2
+        }
+        return true;
+    }
+    return false;
+}
 /*
  * Apply one legal local move and close the local/master cell when required.
  * Preconditions: board is in progress; cell is 0..8; player is 0 or 1; bit is one
@@ -308,107 +405,65 @@ static inline Board2CertificateResult certified_result(const Board2 *board,
  * only whether this move changed certificate input (`cannot_claim` or U
  * status); it is not a legality or move-success result.
  */
-static inline bool board2_play(Board2 *board, u8 cell, onehot9 bit,
-                               u8 player)
+static inline bool board2_play(Board2 *board, Move move ,u8 player)
 {
     ASSERT(board != NULL);
-    ASSERT(cell < 9);
+    ASSERT(move.subboard < 9);
     ASSERT(player < 2);
-    ASSERT_1SHOT9(bit);
-    onehot9 cell_bit = (onehot9)(1u << cell);
-    mask9 occupied;
-    bool local_win;
-    bool proof_changed = false;
-    u8 opponent = player ^ 1u;
-
-    ASSERT_MASK9(board->marks[0][cell]);
-    ASSERT_MASK9(board->marks[1][cell]);
-    ASSERT_MASK9(board->marks[0][UBOARD]);
-    ASSERT_MASK9(board->marks[1][UBOARD]);
-    ASSERT_MASK9(board->cannot_claim[0]);
-    ASSERT_MASK9(board->cannot_claim[1]);
-    ASSERT_1SHOT9(cell_bit);
-    board->marks[player][cell] |= bit;
-    occupied = (mask9)(board->marks[0][cell] | board->marks[1][cell]);
-    ASSERT_MASK9(board->marks[0][cell]);
-    ASSERT_MASK9(board->marks[1][cell]);
+    ASSERT_1SHOT9(move.local_bit);
+    ASSERT(board->winner == BOARD2_IN_PROGRESS);
+    
+    mask9 occupied = (mask9)(board->marks[0][move.subboard] | board->marks[1][move.subboard]);
     ASSERT_MASK9(occupied);
-#if defined(BOARD2_USE_VCACHE) && BOARD2_USE_VCACHE
-    local_win = has_three_in_a_row_vcache(board->marks[player][cell]);
-#else
-    local_win = has_three_in_a_row(board->marks[player][cell]);
-#endif
+    ASSERT( (move.local_bit & occupied) == 0 );
+    bool proof_changed = false;
+    u8 op = opponent(player);
+    onehot9 subboard_bit = onehot9_from_index(move.subboard);
 
-    /* A legal mark can only newly block the opponent's lines.  Set that
-     * player's local-board bit when every fixed line contains our mark;
-     * ORing preserves the monotone history invariant. */
-    if (!(board->cannot_claim[opponent] & cell_bit)) {
-#if defined(BOARD2_USE_VCACHE) && BOARD2_USE_VCACHE
-        if (!still_win_vcache(board->marks[player][cell]))
-#else
-        if (!still_win(board->marks[player][cell]))
-#endif
-        {
-            board->cannot_claim[opponent] |= cell_bit;
-            proof_changed = true;
+    board->marks[player][move.subboard] |= move.local_bit;
+    occupied |= move.local_bit;
+ 
+    bool local_win = has_three_in_a_row(board->marks[player][move.subboard]);
+
+    if (local_win) { // player just won the local board with a three-in-a-row
+        board->marks[player][UBOARD] |= subboard_bit;      // Win this sqaure on the U-board
+        proof_changed = true;
+        board->cannot_claim[0] |= subboard_bit;
+        board->cannot_claim[1] |= subboard_bit;
+        mask9 remaining = (mask9)(M111111111 & ~occupied);
+
+        board->marks[player][move.subboard] |= remaining; // FILL all blanks in sub-board
+        mask9 owned = board2_owned(board, player);
+        
+        if ( has_three_in_a_row(owned) ) {
+            board->winner = (i8)(player + 1);  
+            return true;      
         }
+        // Player has not got 3IAR but might have closed the last sub-board
+        check_and_close_uboard(board);
+        return true;
     }
-    ASSERT_MASK9(board->cannot_claim[0]);
-    ASSERT_MASK9(board->cannot_claim[1]);
 
-    if (!local_win && occupied != M111111111)
-        return proof_changed;
+    bool local_draw = ( occupied == M111111111 );
 
-    /* A local win is owner status 10/01.  A full local board without a win is
-     * a draw status 11, including the case where the last move filled it. */
-    if (local_win)
-        board->marks[player][cell] |= (mask9)(M111111111 & ~occupied);
-    proof_changed = true;
-    board->marks[player][UBOARD] |= cell_bit;
-    if (!local_win)
-        board->marks[opponent][UBOARD] |= cell_bit;
-    ASSERT_MASK9(board->marks[0][cell]);
-    ASSERT_MASK9(board->marks[1][cell]);
-    ASSERT_MASK9(board->marks[0][UBOARD]);
-    ASSERT_MASK9(board->marks[1][UBOARD]);
-
-    {
-        mask9 owner[2];
-        mask9 closed = (mask9)(board->marks[0][UBOARD] |
-                               board->marks[1][UBOARD]);
-        ASSERT_MASK9(closed);
-
-        /* A status bit in both planes is a draw.  ANDing a player's plane
-         * with the complement of the opponent plane removes those draws and
-         * leaves exactly the actual owner bits. */
-        owner[0] = (mask9)(board->marks[0][UBOARD] &
-                           (mask9)~board->marks[1][UBOARD]);
-        owner[1] = (mask9)(board->marks[1][UBOARD] &
-                           (mask9)~board->marks[0][UBOARD]);
-        ASSERT_MASK9(owner[0]);
-        ASSERT_MASK9(owner[1]);
-
-        /* Only a local win can newly create a master owner, so check the
-         * current player's filtered owner mask for a U line. */
-#if defined(BOARD2_USE_VCACHE) && BOARD2_USE_VCACHE
-        if (local_win && has_three_in_a_row_vcache(owner[player])) {
-#else
-        if (local_win && has_three_in_a_row(owner[player])) {
-#endif
-            board->winner = (i8)(player + 1);
-            return proof_changed;
-        }
-
-        /* ORing the two status planes marks both won and drawn cells closed.
-         * Once all nine bits are set, count only filtered actual owners. */
-        if (closed == M111111111) {
-            u8 p0 = (u8)__builtin_popcount(owner[0]);
-            u8 p1 = (u8)__builtin_popcount(owner[1]);
-            board->winner = (i8)(p0 == p1 ? BOARD2_DRAW :
-                                 (p0 > p1 ? BOARD2_PLAYER0_WIN :
-                                            BOARD2_PLAYER1_WIN));
-        }
+    if (local_draw) {
+        board->marks[0][UBOARD] |= subboard_bit; // Both players bit set for a draw
+        board->marks[1][UBOARD] |= subboard_bit;
+        board->cannot_claim[0] |= subboard_bit;  // neither player can claim this board
+        board->cannot_claim[1] |= subboard_bit;
+        check_and_close_uboard(board);
+        return true;
     }
+
+    // final check - op just played - can p still win this as yet unclaimed sub-board?
+
+    bool claimability_already_lost = (board->cannot_claim[op] & subboard_bit) != 0;
+
+    if (!claimability_already_lost && !still_win(board->marks[player][move.subboard])) {
+        board->cannot_claim[op] |= subboard_bit;
+        proof_changed = true;
+    }    
+
     return proof_changed;
 }
 
