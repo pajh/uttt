@@ -1,0 +1,10 @@
+verify 001_has_three_in_a_row: OK 512 values, fnv1a64=6be279921dc177b1
+verify 001b_has_three_in_a_row_vcache: OK 512 values, fnv1a64=6be279921dc177b1
+verify 002_still_win: OK 512 values, fnv1a64=8959ed04198177f1
+verify 002b_still_win_vcache: OK 512 values, fnv1a64=8959ed04198177f1
+verify 003_take_one_bit: OK 2044 values, fnv1a64=5e737d488511b7dd
+verify 004_winning_cells_simd: OK 39366 values, fnv1a64=4174c9ed1722f969
+verify 005_live_one_mark_lines_simd: OK 19683 values, fnv1a64=8ab577669b57d4df
+verify 006_board2_owned: OK 1048576 values, fnv1a64=c4368e85354f1725
+verify 007_check_and_close_uboard: OK 524288 values, fnv1a64=e22b5f73dadcc8d9
+2026-09-21T11:12:40+01:00

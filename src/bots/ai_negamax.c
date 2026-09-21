@@ -9,15 +9,19 @@
  *
  * Internal coordinates are x = column, y = row; CodinGame I/O is row column.
  */
-#pragma GCC optimize "O3,omit-frame-pointer,inline"
-#pragma GCC target("lzcnt,popcnt")
+/* Local debug/optimized builds are selected explicitly by the makefile.
+ * TODO: restore suitable GCC optimization/target pragmas before producing a
+ * real CodinGame submission, whose compiler flags are outside our control. */
 
 /* ================================ LEVERS ================================
  * Change and record these values for an experiment.  The bot accepts no
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "MM-010-R1MM" /* M = minimax, 010 = experiment counter, R = ratio score. */
+#define HELLO_TEXT "NM-001-R1" /* N = negamax, 001 = experiment counter, R = ratio score. */
+#define DEFAULT_SEED 1u
+
+#define _POSIX_C_SOURCE 200809L
 
 /* Opening policy: two letters, the outer grid class then the inner cell
  * class.  Each letter is one of M, C or D under the cell numbering
@@ -44,6 +48,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h> 
+#include <limits.h>
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -299,14 +304,13 @@ static Score score_board(const Board2 *board)
 
 static bool has_certified_immediate_win(
     const Board2 *board,
-    Move previous_move,
     u8 player)
 {
     ASSERT(board != NULL);
     ASSERT(board->winner == BOARD2_IN_PROGRESS);
     ASSERT(player < 2);
 
-    ValidMoves moves = valid_moves(board, previous_move);
+    ValidMoves moves = valid_moves(board);
     Move move;
 
     while (next_move(&moves, &move)) {
@@ -354,44 +358,72 @@ static bool certifiedScore(const Board2 *board, Score *score) {
     return false;
 }
 
-/* Evaluates a bounded minimax subtree and propagates terminal or timeout values. */
-Score evaluateShallow(Board2 board, int player, Move last_move, int depth, int timed,
-                      bool force_cert_check) {
-    if (timed && searchExpired()) return (Score){TIMEOUT_SCORE,TIMEOUT_SCORE};
-    
-    bool proof_changed = board2_play(&board, last_move, player);
+typedef struct SearchResult_s {
+    int value;
+    bool forced_draw;
+    bool timeout;
+} SearchResult;
 
-    if (board.winner > 0) {
-        u8 awinner = board.winner - 1u;
-        if (awinner == 2)
-            return (Score){TERMINAL_SCORE,TERMINAL_SCORE};
-        return winnerScore(awinner);
+typedef struct SearchConfig_s {
+    int depth;
+    bool timed;
+    bool force_cert_check;
+} SearchConfig;
+
+/* Score the already-constructed position from the side-to-move perspective. */
+static SearchResult negamax(const Board2 *board, u8 player_to_move,
+                            SearchConfig config) {
+    if (config.timed && searchExpired())
+        return (SearchResult){.timeout=true};
+
+    if (board->winner != BOARD2_IN_PROGRESS) {
+        if (board->winner == BOARD2_DRAW)
+            return (SearchResult){.value=0,.forced_draw=true};
+        return (SearchResult){
+            .value=board->winner == player_to_move + 1u
+                ? TERMINAL_SCORE : -TERMINAL_SCORE
+        };
     }
 
-    if (force_cert_check || proof_changed) {
+    if (config.force_cert_check) {
         Score certified;
-        if (certifiedScore(&board, &certified)) return certified;
+        if (certifiedScore(board, &certified)) {
+            if (certified.p0 == TERMINAL_SCORE && certified.p1 == TERMINAL_SCORE)
+                return (SearchResult){.value=0,.forced_draw=true};
+            return (SearchResult){
+                .value=scoreForPlayer(certified, player_to_move)
+            };
+        }
     }
 
-    u8 op = opponent(player);
+    if (config.depth == 0)
+        return (SearchResult){
+            .value=scoreForPlayer(score_board(board), player_to_move)
+        };
 
-    if (depth == 0) return score_board(&board);
-
-    ValidMoves moves = valid_moves(&board, last_move);
+    ValidMoves moves = valid_moves(board);
  
     int best_score = -1000000;
-    Score best = (Score){0,0};
-    u16 next_cell, next_bit;
+    bool best_is_forced_draw = false;
 
     for (Move move; next_move(&moves, &move);) {
-        Score score = evaluateShallow(board,op,move,depth-1,timed,false);
-        if (score.p0 == TIMEOUT_SCORE) return score;
-           
-        int value = scoreForPlayer(score,1-player);  
-        if (value > best_score) { best_score = value; best = score; }
+        Board2 child = *board;
+        bool proof_changed = board2_play(&child, move, player_to_move);
+        SearchResult child_result = negamax(
+            &child, opponent(player_to_move),
+            (SearchConfig){config.depth - 1, config.timed, proof_changed});
+        if (child_result.timeout) return child_result;
+
+        int value = -child_result.value;
+        if (value > best_score ||
+            (value == best_score && child_result.forced_draw &&
+             !best_is_forced_draw)) {
+            best_score = value;
+            best_is_forced_draw = child_result.forced_draw;
+        }
         if (best_score == TERMINAL_SCORE) break;     
     } 
-    return best;
+    return (SearchResult){.value=best_score,.forced_draw=best_is_forced_draw};
 }
 
 enum RootProof {
@@ -448,18 +480,21 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
                 break;
             }
 
-            u16 cell, bit;
-
-            Score score = evaluateShallow(*board,0,root->move,target_plies-1,1,true
-            );
-            if (score.p0 == TIMEOUT_SCORE) {
+            Board2 child = *board;
+            board2_play(&child, root->move, 0);
+            SearchResult result = negamax(
+                &child, 1,
+                (SearchConfig){.depth=target_plies-1, .timed=true,
+                               .force_cert_check=true});
+            if (result.timeout) {
                 time_expired = 1;
                 break;
             }
+            int score = -result.value;
             INSTRUMENT_ROOT_EVALUATED(target_plies);
-            localRigScore(target_plies, root->move, scoreForPlayer(score, 0));
+            localRigScore(target_plies, root->move, score);
 
-            if (score.p0 == TERMINAL_SCORE && score.p1 == 0) {
+            if (score == TERMINAL_SCORE) {
                 root->proof = RootForcedWin;
                 root->score = TERMINAL_SCORE;
                 root->evaluated_plies = target_plies;
@@ -467,21 +502,21 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
                 return root->move;
             }
 
-            if (score.p0 == TERMINAL_SCORE && score.p1 == TERMINAL_SCORE) {
+            if (result.forced_draw) {
                 root->proof = RootForcedDraw;
                 root->score = 0;
                 root->evaluated_plies = target_plies;
                 continue;
             }
 
-            if (score.p1 == TERMINAL_SCORE && score.p0 == 0) {
+            if (score == -TERMINAL_SCORE) {
                 root->proof = RootForcedLoss;
                 root->score = -TERMINAL_SCORE;
                 root->evaluated_plies = target_plies;
                 continue;
             }
 
-            root->score = scoreForPlayer(score,0);
+            root->score = score;
             root->evaluated_plies = target_plies;
         }
 
@@ -637,7 +672,7 @@ static bool isLegalMove(Move move, const ValidMoves *moves)
     if (moves->kind == SINGLE_BOARD) 
         return ((moves->single.subboard == move.subboard) && (moves->single.bits & move.local_bit));
     else
-        return ((moves->full.moves[move.subboard] & onehot9_from_index(move.local_bit)) != 0);
+        return ((moves->full.moves[move.subboard] & move.local_bit) != 0);
 }
 
 /* Resolves one START_RULE letter to a cell index, drawing a random member of
@@ -672,9 +707,8 @@ Move getStartMove(void) {
 /* Applies the opponent move, chooses our legal reply, then updates the board. */
 Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
 {
-    if (last_move.subboard == 0xFF) {
+    if (last_move.subboard != 0xFF)
         board2_play(board, last_move, 1);
-    }
 
     evaluation_calls = 0;
     turn_cache_hits = 0;
@@ -723,19 +757,29 @@ int main(int argc,char* argv[])
         puts(HELLO_TEXT LOCAL_RIG_HELLO);
         return 0;
     }
-    if (argc != 1) error("Only --HELLO is supported\n");
+    unsigned seed = DEFAULT_SEED;
+    if (argc == 3 && strcmp(argv[1], "--seed") == 0) {
+        const char *p = argv[2];
+        if (!*p) error("Invalid seed arguments\n");
+        seed = 0;
+        for (; *p; p++) {
+            if (*p < '0' || *p > '9') error("Invalid seed arguments\n");
+            unsigned digit = (unsigned)(*p - '0');
+            if (seed > (UINT_MAX - digit) / 10u) error("Invalid seed arguments\n");
+            seed = seed * 10u + digit;
+        }
+    } else if (argc != 1) {
+        error("Invalid command-line arguments\n");
+    }
 
 #ifdef CG_GAME
     fprintf(stderr, "Running in CodinGame\n"); 
 #endif
 
-    Board2 p0_board = {0};
+    Board2 p0_board = board2_initial();
 
     localRigInit();
 
-    const char *seed_text = getenv("CG_SEED");
-    unsigned seed = seed_text ? (unsigned)strtoul(seed_text,NULL,10) :
-        (unsigned)(get_gtod_clock_time() ^ (uint64_t)getpid());
     srand(seed);
     int turn = 0;
     // game loop
@@ -771,7 +815,10 @@ int main(int argc,char* argv[])
         if (valid_moves.full.count != valid_action_count) error("Duplicate legal actions\n");
         localRigReadTurn(current_turn);
         
-        Move my_move = getMove(&p0_board, xy2move(last_move.x, last_move.y), &valid_moves);
+        Move opponent_move = last_move.x == -1
+            ? (Move){.subboard=0xFF,.local_bit=1}
+            : xy2move((u8)last_move.x, (u8)last_move.y);
+        Move my_move = getMove(&p0_board, opponent_move, &valid_moves);
         INSTRUMENT_WRITE(current_turn, (int)(move_budget * 1000 + 0.5),
             valid_action_count, my_move, evaluation_calls);
         localRigEndTurn();

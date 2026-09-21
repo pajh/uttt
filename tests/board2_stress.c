@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "board2.h"
+#include "../src/engine/board2.h"
 
 enum { TEST_MASTER_SEED = 0x13579BDFu };
 
@@ -14,6 +14,7 @@ static const mask9 lines[8] = {
 typedef struct Reference_s {
     mask9 local[2][9];
     mask9 u[2];
+    mask9 playable_subboards;
     i8 winner;
 } Reference;
 
@@ -74,6 +75,11 @@ static void check_state(const Board2 *board, const Reference *ref,
     mask9 closed = (mask9)(board->marks[0][UBOARD] |
                            board->marks[1][UBOARD]);
     CHECK(game, ply, board->winner == ref->winner, "winner mismatch");
+    CHECK(game, ply, board->playable_subboards == ref->playable_subboards,
+          "playable subboard mismatch");
+    CHECK(game, ply,
+          (board->playable_subboards & (mask9)~M111111111) == 0,
+          "bad playable subboard mask");
     CHECK(game, ply, (closed & (mask9)~M111111111) == 0, "bad U mask");
     for (unsigned p = 0; p < 2; p++) {
         CHECK(game, ply, board->marks[p][UBOARD] == ref->u[p],
@@ -140,6 +146,14 @@ static void reference_play(Reference *ref, unsigned cell, onehot9 bit,
         ref->u[1] |= cell_bit;
     }
     ref->winner = scalar_winner(ref);
+    if (ref->winner != BOARD2_IN_PROGRESS) {
+        ref->playable_subboards = 0;
+    } else {
+        mask9 open_subboards = (mask9)(M111111111 &
+            ~(ref->u[0] | ref->u[1]));
+        ref->playable_subboards = (open_subboards & bit) != 0
+            ? bit : open_subboards;
+    }
 }
 
 static uint64_t hash_state(uint64_t hash, const Board2 *board,
@@ -158,6 +172,7 @@ static uint64_t hash_state(uint64_t hash, const Board2 *board,
         hash = HASH_U16(hash, board->cannot_claim[p]);
     }
     hash = HASH_BYTE(hash, board->winner);
+    hash = HASH_U16(hash, board->playable_subboards);
     #undef HASH_U16
     #undef HASH_BYTE
     return hash;
@@ -183,8 +198,8 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                           unsigned *out_cert_positions,
                           bool *out_certified_game)
 {
-    Board2 board = {0};
-    Reference ref = {0};
+    Board2 board = board2_initial();
+    Reference ref = {.playable_subboards = M111111111};
     uint64_t rng = master_seed + UINT64_C(0x9e3779b97f4a7c15) * (game + 1);
     uint64_t hash = UINT64_C(1469598103934665603);
     Move last = {0, 1};
@@ -194,7 +209,6 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
     unsigned cert_positions = 0;
     bool draw_certificate = false;
     bool certificate_seen = false;
-    board.winner = BOARD2_IN_PROGRESS;
     ref.winner = BOARD2_IN_PROGRESS;
 
     {
@@ -231,13 +245,15 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
         bool legal[81] = {false};
         unsigned target = (unsigned)__builtin_ctz((unsigned)last.local_bit);
         mask9 closed = (mask9)(ref.u[0] | ref.u[1]);
-        ValidMoves moves = valid_moves(&board, last);
+        ValidMoves moves = valid_moves(&board);
+        mask9 expected_playable = 0;
         unsigned expected = 0;
         bool remaining_legal[81];
 
         if ((closed & (mask9)(1u << target)) == 0) {
             mask9 available = (mask9)(M111111111 &
                 ~(ref.local[0][target] | ref.local[1][target]));
+            expected_playable = (mask9)(1u << target);
             for (unsigned bit = 0; bit < 9; bit++)
                 if (available & (mask9)(1u << bit))
                     legal[target * 9u + bit] = true;
@@ -246,11 +262,15 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                 if (closed & (mask9)(1u << cell)) continue;
                 mask9 available = (mask9)(M111111111 &
                     ~(ref.local[0][cell] | ref.local[1][cell]));
+                if (available != 0)
+                    expected_playable |= (mask9)(1u << cell);
                 for (unsigned bit = 0; bit < 9; bit++)
                     if (available & (mask9)(1u << bit))
                         legal[cell * 9u + bit] = true;
             }
         }
+        CHECK(game, ply, board.playable_subboards == expected_playable,
+              "playable subboards differ from independent legal mask");
         for (unsigned i = 0; i < 81; i++) expected += legal[i];
         if (moves.kind == SINGLE_BOARD)
             CHECK(game, ply, __builtin_popcount(moves.single.bits) == expected,
@@ -263,7 +283,7 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
               enumerate_moves(moves, remaining_legal, game, ply) == expected,
               "enumerated move count mismatch");
 
-        moves = valid_moves(&board, last);
+        moves = valid_moves(&board);
         {
             CHECK(game, ply, expected != 0, "no legal moves in progress");
             unsigned choice = (unsigned)(next_random(&rng) % expected);

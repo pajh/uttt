@@ -2,23 +2,34 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
-#include <time.h>
-#include <unistd.h>
+#include <limits.h>
+
+#define DEFAULT_SEED 1u
 
 /**
  * Auto-generated code below aims at helping you parse
  * the standard input according to the problem statement.
  **/
 
-int main()
+int main(int argc, char **argv)
 {
-    int move_x[81], move_y[81];
-    srand(time(NULL)); // Initialization, should only be called once.   
-    int pid = getpid(); 
-    int t = 0;
-    for (int i=0;i<pid % 109;i++) {
-        t += rand() % 2;
+    unsigned seed = DEFAULT_SEED;
+    if (argc == 3 && strcmp(argv[1], "--seed") == 0) {
+        const char *p = argv[2];
+        if (!*p) { fprintf(stderr, "Invalid seed arguments\n"); return 2; }
+        seed = 0;
+        for (; *p; p++) {
+            if (*p < '0' || *p > '9') { fprintf(stderr, "Invalid seed arguments\n"); return 2; }
+            unsigned digit = (unsigned)(*p - '0');
+            if (seed > (UINT_MAX - digit) / 10u) { fprintf(stderr, "Invalid seed arguments\n"); return 2; }
+            seed = seed * 10u + digit;
+        }
+    } else if (argc != 1) {
+        fprintf(stderr, "Invalid command-line arguments\n");
+        return 2;
     }
+    int move_x[81], move_y[81];
+    srand(seed);
     // game loop
     while (1) {
         int opponent_row;
@@ -42,6 +53,5 @@ int main()
         fflush(stdout);
         //fprintf(stderr, "AI random:sent my move\n");
     }
-    if (t > 1000) printf("xxxxx");
     return 0;
 }

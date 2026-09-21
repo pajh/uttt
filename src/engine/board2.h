@@ -51,9 +51,18 @@ typedef struct Board2_s {
      * in that local board.  These masks start at zero and only gain bits. */
     mask9 cannot_claim[2];
 
+    /* Subboards where the next move may legally be played. */
+    mask9 playable_subboards;
+
     /* 0 ongoing, 1 player 0 winner, 2 player 1 winner, 3 final draw. */
     i8 winner;
 } Board2;
+
+static inline Board2 board2_initial(void)
+{
+    return (Board2){.playable_subboards = M111111111,
+                    .winner = BOARD2_IN_PROGRESS};
+}
 
 typedef struct Move_s {
     u8 subboard;    /* 0..8 master-cell index. */
@@ -389,6 +398,20 @@ static inline bool check_and_close_uboard(Board2 *board) {
     }
     return false;
 }
+
+static inline void board2_update_playable_subboards(Board2 *board, Move move)
+{
+    if (board->winner != BOARD2_IN_PROGRESS) {
+        board->playable_subboards = 0;
+        return;
+    }
+
+    mask9 open_subboards = (mask9)(M111111111 &
+        ~(board->marks[0][UBOARD] | board->marks[1][UBOARD]));
+    mask9 destination_bit = move.local_bit;
+    board->playable_subboards = (open_subboards & destination_bit) != 0
+        ? destination_bit : open_subboards;
+}
 /*
  * Apply one legal local move and close the local/master cell when required.
  * Preconditions: board is in progress; cell is 0..8; player is 0 or 1; bit is one
@@ -437,10 +460,12 @@ static inline bool board2_play(Board2 *board, Move move ,u8 player)
         
         if ( has_three_in_a_row(owned) ) {
             board->winner = (i8)(player + 1);  
+            board2_update_playable_subboards(board, move);
             return true;      
         }
         // Player has not got 3IAR but might have closed the last sub-board
         check_and_close_uboard(board);
+        board2_update_playable_subboards(board, move);
         return true;
     }
 
@@ -452,6 +477,7 @@ static inline bool board2_play(Board2 *board, Move move ,u8 player)
         board->cannot_claim[0] |= subboard_bit;  // neither player can claim this board
         board->cannot_claim[1] |= subboard_bit;
         check_and_close_uboard(board);
+        board2_update_playable_subboards(board, move);
         return true;
     }
 
@@ -464,28 +490,28 @@ static inline bool board2_play(Board2 *board, Move move ,u8 player)
         proof_changed = true;
     }    
 
+    board2_update_playable_subboards(board, move);
     return proof_changed;
 }
 
 /* Generate the currently forced single-board or unrestricted move set. */
-static inline ValidMoves valid_moves(const Board2 *board, Move last_move)
+static inline ValidMoves valid_moves(const Board2 *board)
 {
     ValidMoves result = {0};
-    mask9 closed;
+    mask9 playable;
 
     ASSERT(board != NULL);
     ASSERT(board->winner == BOARD2_IN_PROGRESS);
-    ASSERT_1SHOT9(last_move.local_bit);
     ASSERT_MASK9(board->marks[0][UBOARD]);
     ASSERT_MASK9(board->marks[1][UBOARD]);
 
-    closed = (mask9)(board->marks[0][UBOARD] |
-                     board->marks[1][UBOARD]);
-    ASSERT_MASK9(closed);
+    playable = board->playable_subboards;
+    ASSERT(playable != 0);
+    ASSERT((playable & (mask9)~M111111111) == 0);
+    ASSERT((playable & (board->marks[0][UBOARD] |
+                        board->marks[1][UBOARD])) == 0);
 
-    /* Test closure first: only the open-target path converts the one-hot bit
-     * to a subboard index; ASSERT_1SHOT9's nonzero contract makes ctz valid. */
-    if ((closed & last_move.local_bit) != 0) {
+    if (__builtin_popcount((unsigned)playable) > 1) {
         __m128i p0 = _mm_loadu_si128(
             (const __m128i *)(const void *)&board->marks[0][0]);
         __m128i p1 = _mm_loadu_si128(
@@ -505,9 +531,12 @@ static inline ValidMoves valid_moves(const Board2 *board, Move last_move)
         _mm_storeu_si128((__m128i *)(void *)&result.full.moves[0], free_cells);
         result.full.moves[8] = (mask9)(M111111111 &
             ~(board->marks[0][8] | board->marks[1][8]));
-        result.full.boards = (mask9)boards8;
+        for (u8 subboard = 0; subboard < 9; ++subboard)
+            if ((playable & (mask9)(1u << subboard)) == 0)
+                result.full.moves[subboard] = 0;
+        result.full.boards = (mask9)boards8 & playable;
         if (result.full.moves[8] != 0)
-            result.full.boards |= (mask9)(1u << 8);
+            result.full.boards |= (mask9)(1u << 8) & playable;
         /* _mm_cmpeq_epi16 produces 0xffff for empty lanes.  Packing reduces
          * each 16-bit result to a signed byte while retaining its top bit;
          * _mm_movemask_epi8 extracts those bits, whose low 8 bits represent
@@ -523,7 +552,7 @@ static inline ValidMoves valid_moves(const Board2 *board, Move last_move)
     }
 
     {
-        u8 subboard = (u8)__builtin_ctz((unsigned)last_move.local_bit);
+        u8 subboard = (u8)__builtin_ctz((unsigned)playable);
         mask9 occupied = (mask9)(board->marks[0][subboard] |
                                  board->marks[1][subboard]);
         mask9 bits = (mask9)(M111111111 & ~occupied);

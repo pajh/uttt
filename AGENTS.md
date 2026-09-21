@@ -10,6 +10,35 @@ moves, timeouts, malformed output, or other technical failures.
 Treat that target as an experiment goal, not proof of arena rank.  A change is
 not a strength improvement until it has a recorded, reproducible comparison.
 
+## Project character and proportionality
+
+This is a fun, educational software-learning project, not a production or
+DevOps system. Nothing operational, commercial, confidential, or safety
+critical depends on it. The priorities are clean, compact, well-documented C;
+clear algorithmic reasoning; useful experiments; and learning from failures.
+
+- Prefer the smallest direct implementation that makes the current experiment
+  understandable. Do not add frameworks, infrastructure, generic machinery,
+  compatibility layers, or production hardening for hypothetical future use.
+- Do not expand a request into exhaustive edge-case handling. Cover ordinary
+  inputs and failures that are useful for diagnosing the experiment. If an
+  unlikely condition occurs, a clear failure that can be fixed then is usually
+  better than speculative defensive code now.
+- There is no repository-specific security threat model. Do not spend time or
+  code on adversarial-input handling, security hardening, sandbox design,
+  permissions architecture, secret management, or supply-chain analysis unless
+  the user explicitly asks about one of them.
+- Scripts are disposable experiment tools, not production services. Keep them
+  short and legible; preserve useful evidence on failure, but do not build
+  deployment systems, generalized orchestration, retry frameworks, or elaborate
+  observability around them.
+- Correct game rules, legal CodinGame protocol output, readable C invariants,
+  and reproducible stated experiments matter. Proving robustness under every
+  theoretical condition does not.
+- When scope begins growing beyond the obvious implementation, stop and discuss
+  it. Do not consume time or usage anticipating requirements the user did not
+  ask for.
+
 ## CodinGame submission constraints
 
 - A bot reads the opponent's move and legal moves from standard input and
@@ -151,29 +180,55 @@ Tool usage is expensive.  Work deliberately:
 - Reserve heavyweight investigation and long benchmark runs for a named
   hypothesis with a clear success criterion.
 
-### Experimental delegation workflow
+### Design, delegation and execution workflow
 
-- For bounded routine coding and repository operations, the primary design/review
-  agent should try a `gpt-5.6-luna` sub-agent with zero inherited conversation
-  turns and a short, self-contained brief covering scope, relevant files,
-  constraints, verification, and stop conditions. Do not provide broad history.
-- Because the workspace is shared, avoid simultaneous edits to the same files;
-  the primary agent reviews the resulting diff and evidence. Keep open-ended
-  design and algorithm discussion with the primary agent.
-- Do not run long match batches, commit, push, or make external changes unless
-  specifically authorized. Evaluate the trial by correctness, rework, and
-  available usage or elapsed-time evidence; do not claim guaranteed quota
-  savings.
-- After a change to `ai_minimax`, run `fish scripts/check-candidate.fish` as the
-  quick technical gate. It is not a strength test. Add one or two targeted
-  assertions for the changed behaviour or position whenever possible; the
-  existing unit suite alone does not establish that a heuristic improved.
-- Use the reusable, zero-history Luna briefs in `scripts/README.md` for three
-  bounded jobs: prepare an experiment and its evidence, operate an explicitly
-  requested GitHub run, or gather and summarize evidence read-only. Give the
-  worker the hypothesis, exact files, expected bot ID, seed/game policy, and
-  stop conditions. The primary agent owns experimental interpretation and
-  reviews diffs and results before recommending keep/revert.
+- The primary agent is the C designer and reviewer. Begin a behavioural or
+  structural C task with discussion, not implementation: define the term or
+  algorithm, analyse how it maps onto the current program, identify invariants
+  and trade-offs, and present concrete design options. Continue that discussion
+  until the user agrees which option to implement. A request to discuss,
+  analyse, review, or plan does not authorize edits, compilation, tests, or
+  runs.
+- Treat C source as a constrained resource: justify interfaces, state, branches,
+  and abstractions, and fight unnecessary lines rather than casually adding
+  scaffolding. The primary agent owns the design and the final code review; it
+  does not silently turn a design conversation into an implementation session.
+- Once the user approves a C design, delegate the bounded edit to
+  `gpt-5.6-luna` with zero inherited conversation turns. The brief must specify
+  the exact files and functions in scope, the complete allowed function
+  prototypes, required invariants and behaviour, forbidden changes, and stop
+  conditions. Luna has no authority to add, remove, rename, or alter a function
+  prototype unless that exact prototype change appears in the primary agent's
+  user-approved brief. Ambiguity is a stop condition, not permission to invent.
+- Dispatch Luna once with the complete brief and let it finish without repeated
+  polling or live direction. Tell the user when it is dispatched. Because the
+  workspace is shared, no other agent edits the same files concurrently. When
+  Luna returns, the primary agent reviews the diff against the agreed design
+  before proposing any compilation or execution.
+- OpenCode owns scripting changes and all compilation, test, benchmark,
+  monitoring, summarisation, and reporting work. Give it a separately approved,
+  bounded brief containing exact commands or parameters, expected identities,
+  seed/start policy, outputs, and stop conditions. If OpenCode is unavailable,
+  stop and tell the user; do not silently substitute the primary agent or Luna.
+- Every transition is explicit: discussion -> approved design -> Luna C edit ->
+  primary review -> separately approved OpenCode verification/run. Do not begin
+  the next stage merely because it is a conventional follow-up. Keep the user
+  informed at stage boundaries; never disappear into an unrequested compile,
+  test, or match batch.
+- Long match batches, commits, pushes, external changes, and report publication
+  always require specific authorization. Evaluate a trial by correctness,
+  rework, and available usage or elapsed-time evidence; do not claim guaranteed
+  quota savings.
+- `fish scripts/check-candidate.fish` is the normal quick technical gate after
+  an approved `ai_minimax` change, but running it still belongs to the separately
+  approved OpenCode verification stage. It is not a strength test. The C design
+  should call for one or two targeted assertions for changed behaviour or a
+  position whenever possible; the existing unit suite alone does not establish
+  that a heuristic improved.
+- Use the reusable zero-history briefs in `scripts/README.md` only after adapting
+  them to this staged workflow. The primary agent owns experimental
+  interpretation and reviews diffs and evidence before recommending keep,
+  revert, or further investigation.
 - A request to *plan* an experiment does not authorize a run. A request to run
   on GitHub authorizes dispatch with the stated parameters, but not a blind
   commit or push of unrelated changes. Check the staged/dirty diff, branch,
