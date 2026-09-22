@@ -45,7 +45,7 @@ def check(define: str | None) -> int:
         binary = directory / "runner"
         source.write_text(RUNNER)
         command = [
-            "gcc", "-std=c17", "-Wall", "-Wextra", "-Werror", "-Isrc/engine",
+            "gcc", "-std=gnu17", "-Wall", "-Wextra", "-Werror", "-Isrc/engine",
         ]
         if define:
             command.append(f"-D{define}")

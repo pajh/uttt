@@ -3,9 +3,9 @@
  *
  * The main loop reconstructs the board from CodinGame's stdin protocol.  Each
  * turn uses iterative shallow minimax until its deadline, with a separate
- * exact solver in compact late-game positions.  board.h, hashmap.h and the
- * optional instrument.h are implementation headers so `subst` can create the
- * single C file required for submission.
+ * exact solver in compact late-game positions.  board.h and hashmap.h are
+ * implementation headers so `subst` can create the single C file required for
+ * submission.
  *
  * Internal coordinates are x = column, y = row; CodinGame I/O is row column.
  */
@@ -17,7 +17,7 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "MM-010-R1MM" /* M = minimax, 010 = experiment counter, R = ratio score. */
+#define HELLO_TEXT "MM-011-R1MM" /* M = minimax, 011 = experiment counter, R = ratio score. */
 
 /* Opening policy: two letters, the outer grid class then the inner cell
  * class.  Each letter is one of M, C or D under the cell numbering
@@ -167,8 +167,6 @@ typedef struct Score_s {
    production has no command-line path that changes these lever defaults. */
 static double count_scale = LEVER_COUNT_SCALE;
 static int uscale = LEVER_USCALE;
-#include "local_rig.h"
-#include "instrument.h"
 #define COUNT_UNIT 20
 static u16 f1_cache[POSS_BOARDS][2];
 static const u16 scoring_lines[8] = {7,56,448,73,146,292,273,84};
@@ -308,7 +306,7 @@ Score evaluateShallow(Board9 board, int player, u16 cell, u16 bit, int depth, in
     unsigned char key[KEY_SIZE];
     searchKey(&board, bit, 1-player, depth, key);
     u32 data;
-    if (SEARCH_CACHE_FIND(map,key,&data)) return (Score){data & 65535, data >> 16};
+    if (searchCacheFind(map,key,&data)) return (Score){data & 65535, data >> 16};
     Score best;
     int next_player = 1 - player;
     /* A certified immediate master win is terminal for the side to move,
@@ -404,14 +402,11 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
                 time_expired = 1;
                 break;
             }
-            INSTRUMENT_ROOT_EVALUATED(target_plies);
-            localRigScore(target_plies, root->move, scoreForPlayer(score, 0));
 
             if (score.p0 == TERMINAL_SCORE && score.p1 == 0) {
                 root->proof = RootForcedWin;
                 root->score = TERMINAL_SCORE;
                 root->evaluated_plies = target_plies;
-                INSTRUMENT_SELECTED(TERMINAL_SCORE);
                 return root->move;
             }
 
@@ -443,7 +438,6 @@ Pos evaluateMovesShallowTimed(Board9 *board, Moves2 *valid_moves) {
     }
     if (best_moves.count == 0)
         return roots.moves[rand() % roots.count].move;
-    INSTRUMENT_SELECTED(best_score);
     return best_moves.moves[rand() % best_moves.count];
 }
 
@@ -498,21 +492,10 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
     evaluation_calls = 0;
     turn_cache_hits = 0;
     search_nodes = 0;
-    INSTRUMENT_RESET();
-
-#ifdef LOCAL_RIG
-    if (local_rig_forced.x >= 0) {
-        if (!isLegalMove(local_rig_forced.x, local_rig_forced.y, valid_moves))
-            error("Local rig forced an illegal move\n");
-        set9(board, local_rig_forced.x, local_rig_forced.y, 0);
-        return local_rig_forced;
-    }
-#endif
 
     /* First turn: there is no opponent move to answer, so play the configured
        START_RULE opening directly instead of searching. */
     if (last_move.x == -1) {
-        INSTRUMENT_MODE("opening");
         Pos move = getStartMove();
         if (!isLegalMove(move.x, move.y, valid_moves))
             error("START_RULE produced an illegal opening move\n");
@@ -540,8 +523,9 @@ Pos getMove(Board9 *board, Pos last_move, Moves2 *valid_moves)
 /* Either reports the fixed build identity or runs the CodinGame game loop. */
 int main(int argc,char* argv[])
 {
-    if (argc == 2 && strcmp(argv[1], "--HELLO") == 0) {
-        puts(HELLO_TEXT LOCAL_RIG_HELLO);
+    if (argc >= 2 && strcmp(argv[1], "--HELLO") == 0) {
+        if (argc != 2) error("--HELLO must be the only argument\n");
+        puts(HELLO_TEXT);
         return 0;
     }
     if (argc != 1) error("Only --HELLO is supported\n");
@@ -557,7 +541,6 @@ int main(int argc,char* argv[])
     //memset(&p0_board, 0, sizeof(p0_board)); 
     p0_board.winner = -1;
     map = createHM(128000,512000);
-    localRigInit();
 
     const char *seed_text = getenv("CG_SEED");
     unsigned seed = seed_text ? (unsigned)strtoul(seed_text,NULL,10) :
@@ -591,12 +574,8 @@ int main(int argc,char* argv[])
             pushMove(&valid_moves, vm);
         }
         if (valid_moves.count != valid_action_count) error("Duplicate legal actions\n");
-        localRigReadTurn(current_turn);
-        
+
         Pos my_move = getMove(&p0_board, last_move, &valid_moves);
-        INSTRUMENT_WRITE(current_turn, (int)(move_budget * 1000 + 0.5),
-            valid_action_count, my_move, evaluation_calls);
-        localRigEndTurn();
         printf("%d %d\n", my_move.y, my_move.x);
         fflush(stdout);
     }

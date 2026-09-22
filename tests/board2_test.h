@@ -89,9 +89,9 @@ static inline void board2_test_build_uboard(unsigned state, Board2 *board)
         unsigned status = (state >> (2 * cell)) & 3u;
         mask9 bit = (mask9)(1u << cell);
         if (status == 1u || status == 3u)
-            board->marks[0][UBOARD] |= bit;
+            board->umarks[0] |= bit;
         if (status == 2u || status == 3u)
-            board->marks[1][UBOARD] |= bit;
+            board->umarks[1] |= bit;
     }
     board->winner = BOARD2_IN_PROGRESS;
 }

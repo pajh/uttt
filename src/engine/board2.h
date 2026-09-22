@@ -1,7 +1,7 @@
 #ifndef UTTT_BOARD2_H
 #define UTTT_BOARD2_H
 
-/* This standalone prototype targets C17. */
+/* This standalone prototype targets gnu17. */
 #include "support.h"
 #include <emmintrin.h>
 #include <string.h>
@@ -9,7 +9,8 @@
 /* The nine low bits represent a 3x3 board in row-major order.  Internal
  * coordinates are x = column and y = row, so bit (x + 3*y) is that cell. */
 #define M111111111 0x1FFu
-#define UBOARD 9
+#define DRAW_P0_MASK ((mask9)397)  // bits 0,2,3,7,8
+#define DRAW_P1_MASK ((mask9)114)  // bits 1,4,5,6
 
 /* Domain aliases document 3x3 mask shapes; C typedefs do not enforce them.
  * mask9 has only bits 0..8, while onehot9 has exactly one of those bits and
@@ -43,9 +44,13 @@ typedef enum Board2Winner_e {
 #endif
 
 typedef struct Board2_s {
-    /* Local masks use indices 0..8; UBOARD is a special status cell with
-     * 00=open, 10/01=player-owned, and 11=draw. */
-    mask9 marks[2][10];
+    /* The nine local boards, marks[player][cell] with cell 0..8. */
+    mask9 marks[2][9];
+
+    /* U-board status planes.  Bit c of umarks[p] is status bit p of master cell
+     * c: 00=open, 10/01=player-owned, 11=draw.  These are status planes, not
+     * owner masks; owner[p] = umarks[p] & ~umarks[p^1]. */
+    mask9 umarks[2];
 
     /* A bit means local geometry proves that player p has no unblocked line
      * in that local board.  These masks start at zero and only gain bits. */
@@ -149,8 +154,8 @@ static inline mask9 board2_owned(const Board2 *board, u8 player)
     ASSERT(player < 2);
 
     return (mask9)(
-        board->marks[player][UBOARD]
-        & (mask9)~board->marks[opponent(player)][UBOARD]
+        board->umarks[player]
+        & (mask9)~board->umarks[opponent(player)]
     );
 }
 
@@ -351,17 +356,17 @@ static inline Board2CertificateResult certified_result(const Board2 *board,
 
     ASSERT(board != NULL);
     ASSERT(player < 2);
-    ASSERT_MASK9(board->marks[0][UBOARD]);
-    ASSERT_MASK9(board->marks[1][UBOARD]);
+    ASSERT_MASK9(board->umarks[0]);
+    ASSERT_MASK9(board->umarks[1]);
     ASSERT_MASK9(board->cannot_claim[0]);
     ASSERT_MASK9(board->cannot_claim[1]);
     other = player ^ 1u;
     open = (mask9)(M111111111 &
-                   ~(board->marks[0][UBOARD] | board->marks[1][UBOARD]));
-    p_owned = (mask9)(board->marks[player][UBOARD] &
-                      (mask9)~board->marks[other][UBOARD]);
-    other_owned = (mask9)(board->marks[other][UBOARD] &
-                          (mask9)~board->marks[player][UBOARD]);
+                   ~(board->umarks[0] | board->umarks[1]));
+    p_owned = (mask9)(board->umarks[player] &
+                      (mask9)~board->umarks[other]);
+    other_owned = (mask9)(board->umarks[other] &
+                          (mask9)~board->umarks[player]);
     other_claimable = (mask9)(open &
                               (mask9)~board->cannot_claim[other]);
     other_possible = (mask9)(other_owned | other_claimable);
@@ -385,10 +390,10 @@ static inline Board2CertificateResult certified_result(const Board2 *board,
 // to a count win or a draw.
 // returns true if the game is closed
 static inline bool check_and_close_uboard(Board2 *board) {
-    mask9 closed = board->marks[0][UBOARD] | board->marks[1][UBOARD];
+    mask9 closed = board->umarks[0] | board->umarks[1];
     if (closed == M111111111) {
-        u8 p0 = (u8)__builtin_popcount(board->marks[0][UBOARD]);
-        u8 p1 = (u8)__builtin_popcount(board->marks[1][UBOARD]);
+        u8 p0 = (u8)__builtin_popcount(board->umarks[0]);
+        u8 p1 = (u8)__builtin_popcount(board->umarks[1]);
         if (p0 == p1) {
             board->winner = 3;
         } else {
@@ -407,7 +412,7 @@ static inline void board2_update_playable_subboards(Board2 *board, Move move)
     }
 
     mask9 open_subboards = (mask9)(M111111111 &
-        ~(board->marks[0][UBOARD] | board->marks[1][UBOARD]));
+        ~(board->umarks[0] | board->umarks[1]));
     mask9 destination_bit = move.local_bit;
     board->playable_subboards = (open_subboards & destination_bit) != 0
         ? destination_bit : open_subboards;
@@ -449,13 +454,16 @@ static inline bool board2_play(Board2 *board, Move move ,u8 player)
     bool local_win = has_three_in_a_row(board->marks[player][move.subboard]);
 
     if (local_win) { // player just won the local board with a three-in-a-row
-        board->marks[player][UBOARD] |= subboard_bit;      // Win this sqaure on the U-board
+        board->umarks[player] |= subboard_bit;      // Win this sqaure on the U-board
         proof_changed = true;
         board->cannot_claim[0] |= subboard_bit;
         board->cannot_claim[1] |= subboard_bit;
-        mask9 remaining = (mask9)(M111111111 & ~occupied);
+        //mask9 remaining = (mask9)(M111111111 & ~occupied);
+        // experiment: 0001 - mask winner to all 1s loser to all 0s
 
-        board->marks[player][move.subboard] |= remaining; // FILL all blanks in sub-board
+        //board->marks[player][move.subboard] |= remaining; // FILL all blanks in sub-board
+        board->marks[player][move.subboard] = M111111111;
+        board->marks[op][move.subboard] = 0;
         mask9 owned = board2_owned(board, player);
         
         if ( has_three_in_a_row(owned) ) {
@@ -472,10 +480,12 @@ static inline bool board2_play(Board2 *board, Move move ,u8 player)
     bool local_draw = ( occupied == M111111111 );
 
     if (local_draw) {
-        board->marks[0][UBOARD] |= subboard_bit; // Both players bit set for a draw
-        board->marks[1][UBOARD] |= subboard_bit;
+        board->umarks[0] |= subboard_bit; // Both players bit set for a draw
+        board->umarks[1] |= subboard_bit;
         board->cannot_claim[0] |= subboard_bit;  // neither player can claim this board
         board->cannot_claim[1] |= subboard_bit;
+        board->marks[0][move.subboard] = DRAW_P0_MASK;
+        board->marks[1][move.subboard] = DRAW_P1_MASK;
         check_and_close_uboard(board);
         board2_update_playable_subboards(board, move);
         return true;
@@ -502,14 +512,14 @@ static inline ValidMoves valid_moves(const Board2 *board)
 
     ASSERT(board != NULL);
     ASSERT(board->winner == BOARD2_IN_PROGRESS);
-    ASSERT_MASK9(board->marks[0][UBOARD]);
-    ASSERT_MASK9(board->marks[1][UBOARD]);
+    ASSERT_MASK9(board->umarks[0]);
+    ASSERT_MASK9(board->umarks[1]);
 
     playable = board->playable_subboards;
     ASSERT(playable != 0);
     ASSERT((playable & (mask9)~M111111111) == 0);
-    ASSERT((playable & (board->marks[0][UBOARD] |
-                        board->marks[1][UBOARD])) == 0);
+    ASSERT((playable & (board->umarks[0] |
+                        board->umarks[1])) == 0);
 
     if (__builtin_popcount((unsigned)playable) > 1) {
         __m128i p0 = _mm_loadu_si128(

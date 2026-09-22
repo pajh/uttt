@@ -1,33 +1,45 @@
 CC = gcc
 CFLAGS ?= -Wall -g
-CFLAGS += -std=c17
+CFLAGS += -std=gnu17
 ifeq ($(BOARD_ASSERTS),1)
 CFLAGS += -DBOARD_ASSERTS=1
 endif
 LOCAL_ARCH ?= -march=native
-LOCAL_RIG ?= 0
+# Use 550000 evaluations unless the caller supplies MAX_SCORE explicitly.
+MAX_SCORE ?= 480000
+# ai_negamax build options, each 0 or 1.  They affect only ai_negamax; orig and
+# ai_random always build optimised and ignore them.
+#   D=1 debug (sanitisers, -O0); D=0 optimised (-O3)
+#   L=1 local C&C / instrumentation (LOCAL_RIG)
+#   A=1 assertions (BOARD_ASSERTS)
+#   E=1 evaluation timeout (EVALUATION_TIMEOUT + MAX_SCORE)
+D ?= 0
+L ?= 0
+A ?= 0
+E ?= 0
+NEGAMAX_CFLAGS = $(if $(filter 1,$(D)),$(DEBUG_CFLAGS),$(OPTIMIZED_CFLAGS))
+NEGAMAX_DEFS = -DNEGAMAX_DEBUG=$(D) -DNEGAMAX_LOCAL=$(L) -DNEGAMAX_ASSERTS=$(A) -DNEGAMAX_EVAL=$(E)
+NEGAMAX_DEFS += $(if $(filter 1,$(L)),-DLOCAL_RIG,)
+NEGAMAX_DEFS += $(if $(filter 1,$(A)),-DBOARD_ASSERTS=1,)
+NEGAMAX_DEFS += $(if $(filter 1,$(E)),-DEVALUATION_TIMEOUT=1 -DMAX_SCORE=$(MAX_SCORE),)
 ENGINE_DIR := src/engine
 BOT_DIR := src/bots
 RIG_DIR := src/rig
 LEGACY_DIR := src/legacy
-TOOL_DIR := tools/c
 CPPFLAGS := -I$(ENGINE_DIR)
-DEBUG_CFLAGS := -Wall -Wextra -g3 -O0
+DEBUG_CFLAGS := -Wall -Wextra -g3 -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 OPTIMIZED_CFLAGS := -Wall -O3
 
-.PHONY: all submission test test-board2 test-board2-stress tools help prune-experiments \
-	bin/ai_minimax bin/ai_negamax \
-	debug-ai_random optimized-ai_random debug-ai_negamax optimized-ai_negamax
-all: bin/gamerig bin/orig bin/ai_random bin/ai_minimax
+.PHONY: all test test-board2 test-board2-stress help prune-experiments tune-negamax \
+	ai_negamax clean bin/ai_negamax bin/ai_failbot
+all: bin/gamerig bin/orig bin/ai_random bin/ai_failbot
 
 help:
 	@echo "make              Build the supported local bots and match runner"
-	@echo "make test         Run current board/search regression tests"
-	@echo "make submission   Generate bin/submission.c for CodinGame"
-	@echo "make tools        Build optional local analysis tools"
-	@echo "make LOCAL_RIG=1 bin/ai_minimax  Enable local rig C&C (including instrumentation commands)"
-	@echo "make debug-ai_random / optimized-ai_random    Force a debug / optimized random-bot build"
-	@echo "make debug-ai_negamax / optimized-ai_negamax  Force a debug+assert+instrument / optimized negamax build"
+	@echo "make test         Run the board2 engine regression tests"
+	@echo "make ai_negamax D=<0|1> L=<0|1> A=<0|1> E=<0|1>"
+	@echo "                  Build negamax (D debug, L local rig, A asserts, E eval timeout)"
+	@echo "make clean        Remove generated binaries"
 	@echo "make prune-experiments  Delete raw artifacts older than 14 days"
 
 bin:
@@ -36,50 +48,36 @@ bin:
 bin/gamerig: $(RIG_DIR)/gamerig.c $(ENGINE_DIR)/board.h | bin
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
+# orig and ai_random are fixed benchmarks and are always built optimized; a
+# global CFLAGS override must not turn them into slow debug binaries.
 bin/orig: $(LEGACY_DIR)/orig.c | bin
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(OPTIMIZED_CFLAGS) $(LOCAL_ARCH) -std=gnu17 $< -o $@
 
 bin/ai_random: $(BOT_DIR)/ai_random.c | bin
+	$(CC) $(OPTIMIZED_CFLAGS) $(LOCAL_ARCH) -std=gnu17 $< -o $@
+
+bin/ai_failbot: $(BOT_DIR)/ai_failbot.c | bin
 	$(CC) $(CFLAGS) $< -o $@
 
-bin/ai_minimax: $(BOT_DIR)/ai_minimax.c $(BOT_DIR)/instrument.h $(BOT_DIR)/local_rig.h $(ENGINE_DIR)/board.h $(ENGINE_DIR)/hashmap.h | bin
+bin/ai_negamax: $(BOT_DIR)/ai_negamax.c $(BOT_DIR)/local_rig.h $(ENGINE_DIR)/board2.h $(ENGINE_DIR)/support.h $(ENGINE_DIR)/hashmap.h | bin
+	@case '$(D)$(L)$(A)$(E)' in [01][01][01][01]) ;; *) echo 'D, L, A and E must each be 0 or 1' >&2; exit 2;; esac
 	rm -f $@
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOCAL_ARCH) $(if $(filter 1,$(LOCAL_RIG)),-DLOCAL_RIG,) $< -o $@
+	$(CC) $(CPPFLAGS) -std=gnu17 $(NEGAMAX_CFLAGS) $(LOCAL_ARCH) $(NEGAMAX_DEFS) $< -o $@
 
-bin/ai_negamax: $(BOT_DIR)/ai_negamax.c $(BOT_DIR)/instrument.h $(BOT_DIR)/local_rig.h $(ENGINE_DIR)/board2.h $(ENGINE_DIR)/support.h $(ENGINE_DIR)/hashmap.h | bin
-	rm -f $@
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOCAL_ARCH) $(if $(filter 1,$(LOCAL_RIG)),-DLOCAL_RIG,) $< -o $@
+# Always rebuilds (bin/ai_negamax is phony), so a script can pick a build and
+# run it without a separate clean step.
+ai_negamax: bin/ai_negamax
 
-debug-ai_random:
-	$(MAKE) -B CFLAGS='$(DEBUG_CFLAGS)' bin/ai_random
+clean:
+	rm -rf bin
 
-optimized-ai_random:
-	$(MAKE) -B CFLAGS='$(OPTIMIZED_CFLAGS)' bin/ai_random
-
-debug-ai_negamax:
-	$(MAKE) -B CFLAGS='$(DEBUG_CFLAGS)' BOARD_ASSERTS=1 LOCAL_RIG=1 bin/ai_negamax
-
-optimized-ai_negamax:
-	$(MAKE) -B CFLAGS='$(OPTIMIZED_CFLAGS)' BOARD_ASSERTS=0 LOCAL_RIG=0 bin/ai_negamax
-
-# Keep the recovered cg_tictac.c snapshot intact.
-submission: bin/submission.c
-
-bin/submission.c: $(BOT_DIR)/ai_minimax.c $(BOT_DIR)/local_rig.h $(ENGINE_DIR)/board.h $(ENGINE_DIR)/hashmap.h scripts/subst | bin
-	bash scripts/subst > $@.tmp
-	mv $@.tmp $@
-
-bin/cg_tictac: $(LEGACY_DIR)/cg_tictac.c | bin
-	$(CC) $(CFLAGS) $< -o $@
-
-bin/heatdump: $(TOOL_DIR)/heatdump.c $(BOT_DIR)/ai_minimax.c $(ENGINE_DIR)/board.h $(ENGINE_DIR)/hashmap.h | bin
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOCAL_ARCH) $< -o $@
-
-bin/test_current: tests/current_bot.c $(BOT_DIR)/ai_minimax.c $(ENGINE_DIR)/board.h $(ENGINE_DIR)/hashmap.h | bin
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LOCAL_ARCH) $< -o $@
+tune-negamax:
+	@test -n "$(MAX_SCORE)" || { echo 'Usage: make tune-negamax MAX_SCORE=<positive integer>' >&2; exit 2; }
+	@case '$(MAX_SCORE)' in *[!0-9]*|''|0*) echo 'MAX_SCORE must be a positive integer without leading zeroes' >&2; exit 2;; esac
+	fish scripts/tune-negamax.fish '$(MAX_SCORE)'
 
 BOARD2_TEST_SOURCES := tests/board2_test.c tests/board2_test.h tests/test_support.h $(ENGINE_DIR)/board2.h $(ENGINE_DIR)/support.h
-BOARD2_TEST_FLAGS := -std=c17 -Wall -Wextra -Werror -g3 -O0 -I$(ENGINE_DIR)
+BOARD2_TEST_FLAGS := -std=gnu17 -Wall -Wextra -Werror -g3 -O0 -I$(ENGINE_DIR)
 BOARD2_PROOF_BLOBS := $(wildcard tests/vectors/*.expected.bin)
 BOARD2_PROOF_CHECKED := tests/vectors/proof_checked
 
@@ -105,10 +103,7 @@ test-board2: $(BOARD2_PROOF_CHECKED)
 test-board2-stress: bin/board2_stress
 	./bin/board2_stress 1000000 --summary-only
 
-test: bin/test_current test-board2
-	./bin/test_current
-
-tools: bin/heatdump
+test: test-board2
 
 prune-experiments:
 	bash tools/prune-experiments.sh

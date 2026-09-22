@@ -18,6 +18,12 @@
 #include <errno.h>
 #include <limits.h>
 
+/* Identity reported by `--HELLO`.  Increment the trailing number whenever this
+ * bot's behaviour or capabilities change.  The reply names the bot and any
+ * local command-and-control options it supports (this historical baseline
+ * supports none). */
+#define HELLO_TEXT "ORIG001"
+
 #define MASK_ROW 7
 #define MASK_COL 73
 #define MASK_D1 256 + 16 + 1
@@ -1508,6 +1514,12 @@ void testRig() {
 
 int main(int argc,char* argv[])
 {
+    if (argc >= 2 && strcmp(argv[1], "--HELLO") == 0) {
+        if (argc != 2) { fprintf(stderr, "--HELLO must be the only argument\n"); return 2; }
+        puts(HELLO_TEXT);
+        return 0;
+    }
+
     // Init
 
 #ifdef CG_GAME
@@ -1534,17 +1546,18 @@ int main(int argc,char* argv[])
 
             if (strcmp(arg_str, "--seed") == 0) {
                 if (arg >= argc) {
-                    fprintf(stderr, "--seed requires an unsigned integer\n");
+                    fprintf(stderr, "missing seed\n");
                     return 2;
                 }
-                char *end;
-                errno = 0;
-                unsigned long value = strtoul(argv[arg++], &end, 10);
-                if (errno || *end || value > UINT_MAX) {
-                    fprintf(stderr, "Invalid --seed value\n");
-                    return 2;
+                const char *p = argv[arg++];
+                if (!*p) { fprintf(stderr, "bad seed\n"); return 2; }
+                explicit_seed = 0;
+                for (; *p; p++) {
+                    if (*p < '0' || *p > '9') { fprintf(stderr, "bad seed\n"); return 2; }
+                    unsigned digit = (unsigned)(*p - '0');
+                    if (explicit_seed > (UINT_MAX - digit) / 10u) { fprintf(stderr, "bad seed\n"); return 2; }
+                    explicit_seed = explicit_seed * 10u + digit;
                 }
-                explicit_seed = (unsigned)value;
                 has_explicit_seed = 1;
                 continue;
             }
@@ -1562,6 +1575,10 @@ int main(int argc,char* argv[])
             }
         }
 
+    }
+    if (!has_explicit_seed) {
+        fprintf(stderr, "missing seed\n");
+        return 2;
     }
     Board9 p0_board = {0};
     //memset(&p0_board, 0, sizeof(p0_board)); 
@@ -1581,14 +1598,8 @@ int main(int argc,char* argv[])
     printBoard(&p0_board,p, &valid_moves);
     exit(0);*/
     
-    /* Preserve the historical default; explicit seeds replace the PID-dependent
-       warm-up with a stable one, without changing the move policy. */
-    srand(has_explicit_seed ? explicit_seed : (unsigned)time(NULL));
-    unsigned warmup = has_explicit_seed ? explicit_seed % 17 : (unsigned)getpid() % 17;
-    int t = 0;
-    for (unsigned i=0;i<warmup;i++) {
-        t += rand() % 2;
-    }
+    /* Seed setup is explicit only: the rig or caller must supply --seed. */
+    srand(explicit_seed);
     // game loop
     while (1) {
         Pos last_move;

@@ -1,5 +1,5 @@
 name: Bot versus orig
-run-name: ai_minimax versus orig — ${{ inputs.games }} games — ${{ inputs.request_id }}
+run-name: ai_negamax versus orig — ${{ inputs.games }} games — ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         required: true
         default: "1000"
       base_seed:
-        description: First worker seed
+        description: First line seed
         required: true
         default: "20261001"
       request_id:
@@ -24,26 +24,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure fish is available
-        run: |
-          if ! command -v fish >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y fish
-          fi
-          fish --version
+      - name: Build the bots and rig
+        run: make bin/orig ai_negamax D=0 L=0 A=0 E=1
 
-      - name: Run four alternating-start workers
+      - name: Run four alternating-start lines
         env:
           TOTAL_GAMES: ${{ inputs.games }}
           RIG_BASE_SEED: ${{ inputs.base_seed }}
         run: |
           test $((TOTAL_GAMES % 4)) -eq 0
-          export RIG_GAMES_PER_WORKER=$((TOTAL_GAMES / 4))
-          fish scripts/multi-rig.fish
+          export RIG_LINES=4
+          export RIG_GAMES_PER_LINE=$((TOTAL_GAMES / 4))
+          python3 scripts/multi-rig.py --no-interactive
 
-      - name: Show summary
+      - name: Show result table
         if: always()
-        run: cat work/latest/summary.csv || true
+        run: cat reports/multi-latest.log || true
 
       - name: Upload result tables and logs
         if: always()
@@ -52,5 +48,5 @@ jobs:
           name: bot-vs-orig-${{ github.run_id }}
           path: |
             reports/
-            work/latest/
+            work/multi/latest/
           retention-days: 30

@@ -4,7 +4,7 @@ This records the current mask-native design discussion. The prototype at
 `src/engine/board2.h` is unintegrated and table-free. It does not replace
 `src/engine/board.h`, `ai_minimax.c`, the rig, tests, or submission tooling.
 
-New board code targets C17. The aliases `u8`, `i8`, `u16`, and `i16` are
+New board code targets gnu17. The aliases `u8`, `i8`, `u16`, and `i16` are
 defined once in `src/engine/support.h` as aliases for matching `<stdint.h>`
 exact-width types. `uint` is not standard C, and no pragma selects the C
 language dialect.
@@ -30,8 +30,8 @@ claims.
 ## Agreed representation
 
 - `Board2.marks[player][0..8]` stores two disjoint 9-bit player masks for the
-  local boards. `Board2.marks[player][UBOARD]` stores the two U status planes;
-  `UBOARD` is a special index 9 and must not be treated as a local mask.
+  local boards. `Board2.umarks[player]` stores the two U status planes (status
+  planes, not owner masks; `owner[p] = umarks[p] & ~umarks[p^1]`).
   Bit `x + 3*y` is the cell at internal `x = column`, `y = row`.
 - The ultimate board status planes store, for each master cell,
   `status[0], status[1]` are `00 = open`, `10 = player 0 owned`,
@@ -147,8 +147,8 @@ edge positions; test strength separately from the scoring reproduction.
 For a future `f1` adapter, derive local-style U masks as follows:
 
 ```c
-mine = marks[player][UBOARD] & ~marks[other][UBOARD];
-blocked = marks[other][UBOARD];
+mine = umarks[player] & ~umarks[other];
+blocked = umarks[other];
 ```
 
 Pass `(mine, blocked)` to `winning_cells_simd` and

@@ -4,7 +4,7 @@
  * The main loop reconstructs the board from CodinGame's stdin protocol.  Each
  * turn uses iterative shallow minimax until its deadline, with a separate
  * exact solver in compact late-game positions.  board.h, hashmap.h and the
- * optional instrument.h are implementation headers so `subst` can create the
+ * optional local_rig.h are implementation headers so `subst` can create the
  * single C file required for submission.
  *
  * Internal coordinates are x = column, y = row; CodinGame I/O is row column.
@@ -18,8 +18,7 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "NM-001-R1" /* N = negamax, 001 = experiment counter, R = ratio score. */
-#define DEFAULT_SEED 1u
+#define HELLO_TEXT "NM-003-R1" /* N = negamax, 003 = experiment counter, R = ratio score. */
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -43,6 +42,34 @@
 #define TERMINAL_SCORE 60000
 #define TIMEOUT_SCORE 65535
 #define RELATIVE_SCORE_SCALE 10000
+#ifndef EVALUATION_TIMEOUT
+#define EVALUATION_TIMEOUT 0
+#endif
+#ifndef MAX_SCORE
+#define MAX_SCORE 0
+#endif
+#ifndef NEGAMAX_DEBUG
+#define NEGAMAX_DEBUG 0
+#endif
+#ifndef NEGAMAX_LOCAL
+#define NEGAMAX_LOCAL 0
+#endif
+#ifndef NEGAMAX_ASSERTS
+#define NEGAMAX_ASSERTS 0
+#endif
+#ifndef NEGAMAX_EVAL
+#define NEGAMAX_EVAL 0
+#endif
+
+/* Build flags appended to --HELLO (D debug, L local rig, A asserts, E eval
+ * timeout) so a log or report shows how the bot was compiled.  The makefile
+ * sets NEGAMAX_DEBUG/LOCAL/ASSERTS/EVAL; they default to 0. */
+#define NEGAMAX_STR_1(x) #x
+#define NEGAMAX_STR(x) NEGAMAX_STR_1(x)
+#define HELLO_BUILD_FLAGS "-D" NEGAMAX_STR(NEGAMAX_DEBUG) \
+    "L" NEGAMAX_STR(NEGAMAX_LOCAL) \
+    "A" NEGAMAX_STR(NEGAMAX_ASSERTS) \
+    "E" NEGAMAX_STR(NEGAMAX_EVAL)
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -82,18 +109,13 @@ static unsigned long long game_search_us, game_positions, game_cache_hits;
 static unsigned long long game_cert_leaf_hits, game_cert_internal_hits;
 static unsigned long turn_cache_hits;
 
-/* Counts successful cache probes in normal and instrumented builds. */
-static int searchCacheFind(HashMap *hm, unsigned char *key, u32 *data)
-{
-    int found = findHMEntry(hm, key, data);
-    if (found) turn_cache_hits++;
-    return found;
-}
 void error(const char *format, ...);
 
 // Globals
 HashMap* map;
 static unsigned long evaluation_calls;
+static bool evaluation_timeout = EVALUATION_TIMEOUT;
+static unsigned long max_score = MAX_SCORE;
 
 /* Prints a fatal diagnostic and terminates the bot. */
 void error(const char *format, ...)
@@ -107,9 +129,18 @@ void error(const char *format, ...)
     exit(-1);
 }
 
-/* Samples the clock every 64 nodes to amortise timing overhead. */
-int searchExpired(void) {
-    return ((search_nodes++ & 63) == 0) && getElaspedTime() >= search_deadline;
+/* Seed argument failures exit with status 2, matching ai_random and orig. */
+static void seedError(const char *message)
+{
+    fprintf(stderr, "%s", message);
+    exit(2);
+}
+
+/* Samples the selected search limit every 64 checks. */
+static bool HAVE_WE_TIMED_OUT(void) {
+    if ((search_nodes++ & 63) != 0) return false;
+    if (evaluation_timeout) return evaluation_calls >= max_score;
+    return getElaspedTime() >= search_deadline;
 }
 
 typedef struct Score_s {
@@ -122,7 +153,6 @@ typedef struct Score_s {
 static double count_scale = LEVER_COUNT_SCALE;
 static int uscale = LEVER_USCALE;
 #include "local_rig.h"
-#include "instrument.h"
 #define COUNT_UNIT 20
 
 static const u16 scoring_lines[8] = {7,56,448,73,146,292,273,84};
@@ -157,8 +187,8 @@ static int grid_potential(mask9 mine, mask9 blocked)
 // Based on the overall U board - how many sub-boards does "player" own?
 static inline u8 player_u_win_count(const Board2 *board, u8 player)
 {
-    mask9 owned = board->marks[player][UBOARD]
-                & (mask9)~board->marks[player ^ 1u][UBOARD];
+    mask9 owned = board->umarks[player]
+                & (mask9)~board->umarks[player ^ 1u];
 
     return (u8)__builtin_popcount((unsigned)owned);
 }
@@ -179,14 +209,14 @@ static int u_cell_relevance(const Board2 *board, u8 cell, u8 player)
     ASSERT(player < 2);
 
     onehot9 cell_bit = (onehot9)(1u << cell);
-    mask9 closed = board->marks[0][UBOARD]
-                 | board->marks[1][UBOARD];
+    mask9 closed = board->umarks[0]
+                 | board->umarks[1];
 
     if (closed & cell_bit)
         return 0;
 
     mask9 owned = board2_owned(board, player);
-    mask9 blocked = board->marks[player ^ 1u][UBOARD];
+    mask9 blocked = board->umarks[player ^ 1u];
 
     int best_line_score = 0;
 
@@ -219,7 +249,7 @@ static u8 live_u_winning_cell_count(const Board2 *board, u8 player)
      * The opponent's U-status plane blocks both opponent-owned and drawn
      * cells. Player-owned cells are already present in owned.
      */
-    mask9 blocked = board->marks[opponent(player)][UBOARD];
+    mask9 blocked = board->umarks[opponent(player)];
 
     mask9 winning_cells = winning_cells_simd(owned, blocked);
 
@@ -242,8 +272,8 @@ static Score score_board(const Board2 *board)
 
     evaluation_calls++;
 
-    mask9 closed = board->marks[0][UBOARD]
-                 | board->marks[1][UBOARD];
+    mask9 closed = board->umarks[0]
+                 | board->umarks[1];
 
     int strength[2];
 
@@ -256,7 +286,7 @@ static Score score_board(const Board2 *board)
          * The other status plane contains opponent-owned cells and draws,
          * both of which block this player's U lines.
          */
-        mask9 u_blocked = board->marks[other][UBOARD];
+        mask9 u_blocked = board->umarks[other];
 
         int main_strength =
             grid_potential(u_owned, u_blocked);
@@ -373,7 +403,7 @@ typedef struct SearchConfig_s {
 /* Score the already-constructed position from the side-to-move perspective. */
 static SearchResult negamax(const Board2 *board, u8 player_to_move,
                             SearchConfig config) {
-    if (config.timed && searchExpired())
+    if (config.timed && HAVE_WE_TIMED_OUT())
         return (SearchResult){.timeout=true};
 
     if (board->winner != BOARD2_IN_PROGRESS) {
@@ -404,7 +434,7 @@ static SearchResult negamax(const Board2 *board, u8 player_to_move,
     ValidMoves moves = valid_moves(board);
  
     int best_score = -1000000;
-    bool best_is_forced_draw = false;
+    bool forced_draw = true;
 
     for (Move move; next_move(&moves, &move);) {
         Board2 child = *board;
@@ -415,15 +445,14 @@ static SearchResult negamax(const Board2 *board, u8 player_to_move,
         if (child_result.timeout) return child_result;
 
         int value = -child_result.value;
-        if (value > best_score ||
-            (value == best_score && child_result.forced_draw &&
-             !best_is_forced_draw)) {
+        if (value > best_score ) {
             best_score = value;
-            best_is_forced_draw = child_result.forced_draw;
         }
+
         if (best_score == TERMINAL_SCORE) break;     
+        if (!child_result.forced_draw && value != -TERMINAL_SCORE) forced_draw = false;
     } 
-    return (SearchResult){.value=best_score,.forced_draw=best_is_forced_draw};
+    return (SearchResult){.value=best_score,.forced_draw=forced_draw && best_score == 0};
 }
 
 enum RootProof {
@@ -445,11 +474,32 @@ typedef struct RootMoves_s {
     int count;
 } RootMoves;
 
+typedef struct XYMove_s {
+    u8 x;
+    u8 y;
+} XYMove;
+
+/* Convert an internal Board2 move to global 9x9 coordinates. */
+static inline XYMove move2xy(Move move);
+
+/* Records every root move and its final score for the instrumented move line. */
+#ifdef LOCAL_RIG
+static void captureCandidates(const RootMoves *roots) {
+    if (!localRigInstrumenting()) return;
+    localRigBeginCandidates();
+    for (int i = 0; i < roots->count; i++) {
+        XYMove xy = move2xy(roots->moves[i].move);
+        localRigAddCandidate(xy.y, xy.x, roots->moves[i].score);
+    }
+}
+#else
+#define captureCandidates(roots) ((void)(roots))
+#endif
+
 /* Iteratively deepens all viable root moves until the per-turn deadline. */
 Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
     RootMoves current = {0};
     RootMoves previous = {0};
-    //resetMoveIt(valid_moves); ?? still needed?
     
     for (Move move; next_move(&valid_moves,&move);) {
         current.moves[current.count].move = move;
@@ -474,8 +524,9 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
         for (int i=0;i<current.count;i++) {
             RootMove *root = &current.moves[i];
 
+            // On deeper plies - if the move is a proven draw or loss - don't wasted time on it
             if (root->proof != RootUnproved) continue;
-            if (getElaspedTime() >= search_deadline) {
+            if (HAVE_WE_TIMED_OUT()) {
                 time_expired = 1;
                 break;
             }
@@ -491,27 +542,25 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
                 break;
             }
             int score = -result.value;
-            INSTRUMENT_ROOT_EVALUATED(target_plies);
-            localRigScore(target_plies, root->move, score);
 
             if (score == TERMINAL_SCORE) {
                 root->proof = RootForcedWin;
                 root->score = TERMINAL_SCORE;
                 root->evaluated_plies = target_plies;
-                INSTRUMENT_SELECTED(TERMINAL_SCORE);
+                captureCandidates(&current);
                 return root->move;
-            }
-
-            if (result.forced_draw) {
-                root->proof = RootForcedDraw;
-                root->score = 0;
-                root->evaluated_plies = target_plies;
-                continue;
             }
 
             if (score == -TERMINAL_SCORE) {
                 root->proof = RootForcedLoss;
                 root->score = -TERMINAL_SCORE;
+                root->evaluated_plies = target_plies;
+                continue;
+            }
+            
+            if (result.forced_draw) {
+                root->proof = RootForcedDraw;
+                root->score = 0;
                 root->evaluated_plies = target_plies;
                 continue;
             }
@@ -571,6 +620,7 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
     } else {
         /* With no complete depth there are no trustworthy ordinary scores.
            Prefer an unproved root, then a proved draw, over a forced loss. */
+        captureCandidates(&current);
         for (int i=0;i<current.count;i++)
             if (current.moves[i].proof == RootUnproved)
                 return current.moves[i].move;
@@ -584,7 +634,7 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
     for (int i=1;i<current.count;i++)
         if (current.moves[i].score > current.moves[best_index].score)
             best_index = i;
-    INSTRUMENT_SELECTED(current.moves[best_index].score);
+    captureCandidates(&current);
     return current.moves[best_index].move;
 }
 
@@ -637,11 +687,6 @@ static void add_xy_move(
     valid_moves->full.boards |= onehot9_from_index(subboard);
     valid_moves->full.count++;
 }
-
-typedef struct XYMove_s {
-    u8 x;
-    u8 y;
-} XYMove;
 
 /* Convert an internal Board2 move to global 9×9 coordinates. */
 static inline XYMove move2xy(Move move)
@@ -713,21 +758,18 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
     evaluation_calls = 0;
     turn_cache_hits = 0;
     search_nodes = 0;
-    INSTRUMENT_RESET();
 
-#ifdef LOCAL_RIG
-    if (local_rig_forced.x >= 0) {
-        if (!isLegalMove(local_rig_forced.x, local_rig_forced.y, valid_moves))
+    if (localRigForcedX() >= 0) {
+        Move forced = xy2move((u8)localRigForcedX(), (u8)localRigForcedY());
+        if (!isLegalMove(forced, valid_moves))
             error("Local rig forced an illegal move\n");
-        set9(board, local_rig_forced.x, local_rig_forced.y, 0);
-        return local_rig_forced;
+        board2_play(board, forced, 0);
+        return forced;
     }
-#endif
 
     /* First turn: there is no opponent move to answer, so play the configured
        START_RULE opening directly instead of searching. */
     if (last_move.subboard == 0xFF) {
-        INSTRUMENT_MODE("opening");
         Move move = getStartMove();
         board2_play(board, move, 0);
         return move;
@@ -750,26 +792,46 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
     return my_move;
 }
 
+/* Reads exactly n integers from stdin, one line at a time.  Local-rig control
+   tokens such as [I] are stripped and applied before the line is parsed. */
+static int readInts(int *out, int n) {
+    char line[512];
+    int got = 0;
+    while (got < n) {
+        if (!fgets(line, sizeof(line), stdin)) return got;
+        localRigStripCommands(line);
+        char *p = line;
+        while (got < n) {
+            int value, used;
+            if (sscanf(p, " %d%n", &value, &used) != 1) break;
+            out[got++] = value;
+            p += used;
+        }
+    }
+    return got;
+}
+
 /* Either reports the fixed build identity or runs the CodinGame game loop. */
 int main(int argc,char* argv[])
 {
-    if (argc == 2 && strcmp(argv[1], "--HELLO") == 0) {
-        puts(HELLO_TEXT LOCAL_RIG_HELLO);
+    if (argc >= 2 && strcmp(argv[1], "--HELLO") == 0) {
+        if (argc != 2) { fprintf(stderr, "--HELLO must be the only argument\n"); return 2; }
+        puts(HELLO_TEXT HELLO_BUILD_FLAGS);
         return 0;
     }
-    unsigned seed = DEFAULT_SEED;
+    unsigned seed = 0;
     if (argc == 3 && strcmp(argv[1], "--seed") == 0) {
         const char *p = argv[2];
-        if (!*p) error("Invalid seed arguments\n");
+        if (!*p) seedError("bad seed\n");
         seed = 0;
         for (; *p; p++) {
-            if (*p < '0' || *p > '9') error("Invalid seed arguments\n");
+            if (*p < '0' || *p > '9') seedError("bad seed\n");
             unsigned digit = (unsigned)(*p - '0');
-            if (seed > (UINT_MAX - digit) / 10u) error("Invalid seed arguments\n");
+            if (seed > (UINT_MAX - digit) / 10u) seedError("bad seed\n");
             seed = seed * 10u + digit;
         }
-    } else if (argc != 1) {
-        error("Invalid command-line arguments\n");
+    } else {
+        seedError("missing seed\n");
     }
 
 #ifdef CG_GAME
@@ -778,52 +840,48 @@ int main(int argc,char* argv[])
 
     Board2 p0_board = board2_initial();
 
-    localRigInit();
-
     srand(seed);
     int turn = 0;
     // game loop
     while (1) {
-        
-        struct {
-            int x;
-            int y;
-        } last_move;
+        int last_move[2];
         ValidMoves valid_moves = { .kind = MULTI_BOARD, .full = { 0 } };
 
-        int i = scanf("%d%d", &last_move.y, &last_move.x);
-        if (i == EOF) break;
-        if (i < 2) error("Failed to read last move\n");
-        
-        if (!((last_move.x == -1 && last_move.y == -1) || 
-        (last_move.x>=0 && last_move.x<=8 && last_move.y>=0 && last_move.y<=8))) error("Invalid opponent move\n");
+        localRigBeginTurn();
+        int got = readInts(last_move, 2);
+        if (got == 0) break;
+        if (got < 2) error("Failed to read last move\n");
+        int last_x = last_move[1];
+        int last_y = last_move[0];
+
+        if (!((last_x == -1 && last_y == -1) ||
+        (last_x>=0 && last_x<=8 && last_y>=0 && last_y<=8))) error("Invalid opponent move\n");
         start_time = get_gtod_clock_time();
         int current_turn = ++turn;
         move_budget = current_turn == 1 ? 0.900 : MAX_TIME;
-        
+
         int valid_action_count;
-        if (scanf("%d", &valid_action_count) < 1) error("Fail to read action_count\n");
+        if (readInts(&valid_action_count, 1) < 1) error("Fail to read action_count\n");
         if (valid_action_count < 1 || valid_action_count > 81) error("Invalid action count\n");
         for (int i = 0; i < valid_action_count; i++) {
-            int row;
-            int col;
-            if ( scanf("%d%d", &row, &col) < 2) error("failed to read a move\n");
+            int rc[2];
+            if (readInts(rc, 2) < 2) error("failed to read a move\n");
+            int row = rc[0];
+            int col = rc[1];
             if (row < 0 || row > 8 || col < 0 || col > 8) error("Invalid action coordinates\n");
-            
+
             add_xy_move(&valid_moves, col, row);
         }
         if (valid_moves.full.count != valid_action_count) error("Duplicate legal actions\n");
-        localRigReadTurn(current_turn);
-        
-        Move opponent_move = last_move.x == -1
+
+        Move opponent_move = last_x == -1
             ? (Move){.subboard=0xFF,.local_bit=1}
-            : xy2move((u8)last_move.x, (u8)last_move.y);
+            : xy2move((u8)last_x, (u8)last_y);
         Move my_move = getMove(&p0_board, opponent_move, &valid_moves);
-        INSTRUMENT_WRITE(current_turn, (int)(move_budget * 1000 + 0.5),
-            valid_action_count, my_move, evaluation_calls);
-        localRigEndTurn();
         XYMove xym = move2xy(my_move);
-        printf("%d %d\n", xym.y, xym.x);
+        printf("%d %d", xym.y, xym.x);
+        localRigPrintCandidates();
+        putchar('\n');
         fflush(stdout);
     }
     if (getenv("CG_LOCAL_STATS")) {

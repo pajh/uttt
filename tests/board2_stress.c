@@ -72,8 +72,8 @@ static void fail(unsigned game, unsigned ply, const char *message)
 static void check_state(const Board2 *board, const Reference *ref,
                         unsigned game, unsigned ply)
 {
-    mask9 closed = (mask9)(board->marks[0][UBOARD] |
-                           board->marks[1][UBOARD]);
+    mask9 closed = (mask9)(board->umarks[0] |
+                           board->umarks[1]);
     CHECK(game, ply, board->winner == ref->winner, "winner mismatch");
     CHECK(game, ply, board->playable_subboards == ref->playable_subboards,
           "playable subboard mismatch");
@@ -82,9 +82,9 @@ static void check_state(const Board2 *board, const Reference *ref,
           "bad playable subboard mask");
     CHECK(game, ply, (closed & (mask9)~M111111111) == 0, "bad U mask");
     for (unsigned p = 0; p < 2; p++) {
-        CHECK(game, ply, board->marks[p][UBOARD] == ref->u[p],
+        CHECK(game, ply, board->umarks[p] == ref->u[p],
               "U plane mismatch");
-        CHECK(game, ply, (board->marks[p][UBOARD] &
+        CHECK(game, ply, (board->umarks[p] &
                           (mask9)~M111111111) == 0, "bad U plane");
         CHECK(game, ply, (board->cannot_claim[p] &
                           (mask9)~M111111111) == 0, "bad claim mask");
@@ -110,8 +110,8 @@ static void check_state(const Board2 *board, const Reference *ref,
     for (unsigned cell = 0; cell < 9; cell++) {
         mask9 bit = (mask9)(1u << cell);
         bool is_closed = (closed & bit) != 0;
-        bool draw = (board->marks[0][UBOARD] & bit) != 0 &&
-                    (board->marks[1][UBOARD] & bit) != 0;
+        bool draw = (board->umarks[0] & bit) != 0 &&
+                    (board->umarks[1] & bit) != 0;
         if (is_closed) {
             mask9 occupied = (mask9)(board->marks[0][cell] |
                                      board->marks[1][cell]);
@@ -121,7 +121,7 @@ static void check_state(const Board2 *board, const Reference *ref,
                       !scalar_has_line(board->marks[1][cell]),
                       "drawn local contains a line");
             } else {
-                mask9 owner = (board->marks[0][UBOARD] & bit) ?
+                mask9 owner = (board->umarks[0] & bit) ?
                     board->marks[0][cell] : board->marks[1][cell];
                 CHECK(game, ply, scalar_has_line(owner),
                       "owned local lacks a line");
@@ -166,9 +166,10 @@ static uint64_t hash_state(uint64_t hash, const Board2 *board,
     hash = HASH_BYTE(hash, move.subboard);
     hash = HASH_U16(hash, move.local_bit);
     for (unsigned p = 0; p < 2; p++) {
-        for (unsigned cell = 0; cell <= UBOARD; cell++) {
+        for (unsigned cell = 0; cell < 9; cell++) {
             hash = HASH_U16(hash, board->marks[p][cell]);
         }
+        hash = HASH_U16(hash, board->umarks[p]);
         hash = HASH_U16(hash, board->cannot_claim[p]);
     }
     hash = HASH_BYTE(hash, board->winner);

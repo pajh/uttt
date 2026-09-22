@@ -78,7 +78,7 @@ clear algorithmic reasoning; useful experiments; and learning from failures.
 - The local referee belongs in `src/rig/`.
 - `src/legacy/` is historical evidence.  Do not refactor or "clean up" it
   while experimenting with the current bot; preserve it as the benchmark.
-- New board code targets C17. The aliases `u8`, `i8`, `u16`, and `i16` are
+- New board code targets gnu17. The aliases `u8`, `i8`, `u16`, and `i16` are
   defined once in `src/engine/support.h`, mapped to matching `<stdint.h>`
   exact-width types. `uint` is not a standard C type, and no GCC pragma
   selects the C language dialect.
@@ -117,23 +117,25 @@ evidence under `published-results/` and update the citation before cleaning
 `work/`. Never automate deletion of `progress.md`, `published-results/`, source
 files, or a run the user explicitly asked to preserve.
 
-The normal bot also reports one cumulative end-of-game local stats
-record (timed search microseconds, scored positions, cache hits), independent
-of C&C instrumentation; the rig stores it in each game CSV row. `scripts/summarize-rig.py`
-totals these and computes positions/s from the totals. Use
-`fish scripts/interpret_multi_csv.fish` to render the latest summary as HTML,
-or pass a specific summary CSV path.
+The normal bot can still report one cumulative end-of-game local stats record
+(timed search microseconds, scored positions, cache hits), but the current
+single-game `gamerig` does not request or store it. `scripts/multi-rig.py`
+summarizes wins, losses, draws and technical forfeits from the per-game JSON; it
+does not report search totals.
 
-Opt-in `LOCAL_RIG=1` builds of `ai_minimax` use a separate version-1 rig C&C socket documented
-in `docs/ARCHITECTURE.md`. Keep its protocol and telemetry implementation in
-`src/bots/local_rig.h`, with only small hooks in the bot. CodinGame submission
+Opt-in `L=1` builds of `ai_negamax` carry local instrumentation documented in
+`docs/ARCHITECTURE.md`. Keep its protocol and telemetry implementation in
+`src/bots/local_rig.h`, with only small hooks in the bot. Version 2 is in-band:
+the bot strips bracketed control tokens such as `[I]` and `[F56]` from its
+ordinary stdin data lines and appends one `[I {row,col,score}, ...]` candidate
+record to its move line. `--HELLO` appends the build flags and advertises `L1`
+when instrumentation is compiled in, and `gamerig --instrument <0|1>` names the
+single instrumented player. CodinGame submission
 builds compile the hooks away; never put rig commands on the game's stdin or
-extra records on move stdout. Forced moves, score events and experiment
-settings are the first uses of this common local protocol. Ordinary multi-rig
-runs keep the plain build and the existing cumulative `@GAME_STATS` collection;
-root-score C&C telemetry would add I/O to every search turn. The one-game
-instrument path sends `INSTRUMENT` over C&C and has the rig write raw
-turn/score CSVs; the bot itself must not open a report file.
+extra records on move stdout in a non-`LOCAL_RIG` build. Forced moves and root
+candidate scores are the first uses of this common local protocol. Ordinary
+multi-rig runs keep the plain build and the existing cumulative `@GAME_STATS`
+collection. The retired one-game scripts still target the old fd-3 channel.
 
 Game CSV rows record the rig seed and starting player. The rig passes that
 same seed to `ai_minimax` and, with `--p1-game-seed`, to `orig --seed`. Keep
@@ -143,18 +145,20 @@ replay using the recorded move trace or `trace_hash`.
 
 ## Tool output convention
 
-- New scripts should be written in fish.  A repeatable tool command should
-  always write the same readable report name, such as
-  `reports/latest-analysis.html` or `reports/instrument/report.html`.
+- New scripts should be written in fish, except where a tool consumes the rig's
+  JSON or otherwise needs structured parsing, in which case Python (standard
+  library only) is preferred.  A repeatable tool command should always write the
+  same readable report name, such as `reports/multi-latest.log` or
+  `reports/instrument/report.html`.
 - Before replacing `name.ext`, source `scripts/rotate-report.fish` and call
-  `rotate_report name.ext`.  It finds the highest positive integer `N` in
-  `name.N.ext` and moves the current report to `name.(N+1).ext`.  The new
-  report then takes the original, stable name.  Use this for readable output
-  files, not raw intermediate data.
+  `rotate_report name.ext` (or reproduce its numbering in Python).  It finds the
+  highest positive integer `N` in `name.N.ext` and moves the current report to
+  `name.(N+1).ext`.  The new report then takes the original, stable name.  Use
+  this for readable output files, not raw intermediate data.
 - Keep intermediate files under `work/`. A new run clears its preflight files
-  and may archive the prior raw run as `work/latest.N/`; all of `work/` remains
-  cleanable. If a run or summarizer fails, temporarily retain its raw files so
-  `fish scripts/resummarize.fish <run-directory>` can retry without replaying games.
+  and may archive the prior raw run as `work/multi/latest.N/`; all of `work/`
+  remains cleanable. If a run fails, temporarily retain its raw JSON and logs so
+  the games can be re-read without replaying them.
 - Run a short end-to-end preflight through parsing and an in-memory HTML
   rendering check before starting a long batch; do not write a preflight
   report. Never leave a summarizer's first execution
@@ -219,12 +223,12 @@ Tool usage is expensive.  Work deliberately:
   always require specific authorization. Evaluate a trial by correctness,
   rework, and available usage or elapsed-time evidence; do not claim guaranteed
   quota savings.
-- `fish scripts/check-candidate.fish` is the normal quick technical gate after
-  an approved `ai_minimax` change, but running it still belongs to the separately
-  approved OpenCode verification stage. It is not a strength test. The C design
-  should call for one or two targeted assertions for changed behaviour or a
-  position whenever possible; the existing unit suite alone does not establish
-  that a heuristic improved.
+- `make test` plus a short local rig smoke check is the normal quick technical
+  gate after an approved `ai_negamax` change, but running it still belongs to the
+  separately approved OpenCode verification stage. It is not a strength test.
+  The C design should call for one or two targeted assertions for changed
+  behaviour or a position whenever possible; the existing unit suite alone does
+  not establish that a heuristic improved.
 - Use the reusable zero-history briefs in `scripts/README.md` only after adapting
   them to this staged workflow. The primary agent owns experimental
   interpretation and reviews diffs and evidence before recommending keep,

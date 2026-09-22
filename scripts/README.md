@@ -1,12 +1,7 @@
 # Run and report scripts
 
-`check-candidate.fish` is the quick post-change reasonableness check. From the
-repository root, run `fish scripts/check-candidate.fish`. It runs the tests,
-builds the local rig and both bots, checks the `--HELLO` response, generates
-and syntax-checks the submission under 100,000 bytes, then plays two seeded
-games against `orig` with alternating starters. Any non-played result is a
-technical failure. Logs and CSVs are kept in the ignored `work/check-candidate/`
-directory; this is deliberately a smoke test, not a strength benchmark.
+All commands run from the repository root and drive the single-game JSON
+`gamerig` (`gamerig <p0-binary> <p0-args> <p1-binary> <p1-args> <start 0|1>`).
 
 ## Small-context Luna handoffs
 
@@ -18,7 +13,7 @@ launch a run automatically.
 
 **Prepare/check an experiment:** “Hypothesis: [one sentence]. Bot ID: [ID].
 Files in scope: [paths]. Implement [exact change] and a targeted assertion for
-[position/behaviour]. Run `fish scripts/check-candidate.fish`; if that passes,
+[position/behaviour]. Run `make test` and a short local rig smoke check; if those pass,
 run [explicit local comparison command and count, if authorized]. Record the
 command, seeds, identity, W/L/D, technical failures, and decision evidence in
 `progress.md`. Stop on an unexpected diff or failed check. Do not commit, push,
@@ -27,15 +22,14 @@ whether the result supports it; the worker must not silently tune several
 variables until a score looks good.
 
 **Operate an authorized GitHub run:** “Launch [N] games of bot [ID] from
-[branch] against `orig`, using `fish scripts/start-github-1000.fish [N]`.
-First inspect the exact changed files, current HEAD, upstream, and the
-launcher's preconditions. Do not commit or push unless separately authorized;
-if the required run inputs are not committed and pushed, report the files and
-stop. Return the request ID/run link and the exact status/retrieval commands.
-Do not repeatedly poll or claim results before completion.” Once the run has
-finished, a separately requested retrieval uses
-`fish scripts/retrieve-github-latest-1000.fish` and checks bot IDs, count,
-technical failures, and provenance before comparing reports.
+[branch] against `orig` via the `bot-vs-orig` workflow. First inspect the exact
+changed files, current HEAD, upstream, and the workflow's preconditions. Do not
+commit or push unless separately authorized; if the required run inputs are not
+committed and pushed, report the files and stop. Return the run link and the
+exact status commands. Do not repeatedly poll or claim results before
+completion.” The old local dispatch/retrieve helpers were removed with the
+retired multi-game rig; use `gh workflow run bot-vs-orig.yml` and
+`gh run download` directly.
 
 **Gather evidence read-only:** “Question: [specific question]. Sources:
 [report/CSV/game/position paths]. Read only the narrow fields needed; do not
@@ -43,96 +37,69 @@ edit bot code, trigger matches, or regenerate reports. Return the identifiers,
 seed/starting player, exact figures or board observations, uncertainty, and
 the next discriminating test in at most a short paragraph or small table.”
 
-`multi-rig.fish` plays `ai_minimax` against `orig` on separate seed ranges.
-The configuration block at the top names both bot commands, the number of
-simultaneous workers, and games per worker. Its local default is 4 × 25.
-
-From the repository root:
-
-```fish
-fish scripts/multi-rig.fish --interactive
-```
-
-`--interactive` shows a live line per worker. Green `3` and `C` are player-0
-wins by three in a row and small-board count; red means player-0 losses.
-White `D` is a draw, and `F` marks a technical forfeit. Each finished worker
-shows its win percentage. Omit the flag for plain output.
-
-Before the long batch, the script rebuilds the normal `ai_minimax`, plays one
-game per worker, checks summarization, and validates HTML rendering without
-writing a preflight report. The full run then
-writes game tables and logs into `work/latest/`. It prints the combined result
-and creates the final `reports/latest-analysis.html`. Previous HTML reports
-become `reports/latest-analysis.N.html`, with supporting CSVs and logs in
-`work/latest.N/`. Only human-readable HTML goes in `reports/`; CSVs are data
-and stay in `work/`. Both directories are local and ignored by Git.
-The run also records start and finish epoch seconds in `work/latest/run-timing.csv`.
-The HTML displays these as local time, its generation time, and elapsed
-`MMMM:SS` at the top. Older runs without a timing file show “not recorded”.
-The HTML shows wins and
-losses by type, draws, and per-bot search totals. The bot sends one cumulative
-stats record at game end in local rig runs, whether or not C&C instrumentation is on.
-`orig` does not report these figures, so its metrics display as unavailable.
-Search time covers the timed evaluation functions only; positions scored are
-leaf scoring calls, and positions/s uses the aggregate totals.
-
-Each game row records its numeric `seed` and `starting_player`. The rig seeds
-its legal-move shuffle and gives the same game seed to `ai_minimax` (`CG_SEED`)
-and `orig` (`--seed`). `--p1-game-seed` enables the latter for the normal
-matchup. The seed changes by one for each game in a worker. To rerun one saved
-game with the same binaries, use the row's seed and starting player, for
-example:
+`scripts/multi-rig.py` plays a pair of bots across concurrent lines to compare
+their relative performance.  It runs one single-game `gamerig` at a time per
+line, in relaxed mode, and needs only the two bot commands plus the line and
+game counts:
 
 ```fish
-./bin/gamerig -G1 --p0 ./bin/ai_minimax --p1 ./bin/orig \
-    --p1-game-seed --seed 20261001 --p0-first \
-    --games-csv work/replay-games.csv --moves-csv work/replay-moves.csv
+python3 scripts/multi-rig.py --p0 "./bin/ai_negamax" --p1 "./bin/orig" \
+    --lines 4 --games-per-line 25 --seed 20261001
 ```
 
-Use `--p1-first` when `starting_player` is 1. Compare `trace_hash` or the move
-CSV to see whether the rerun matched. Seeds alone do **not** guarantee an exact
-replay: both bots stop some searches by elapsed wall-clock time. Repeated
-one-game checks on two seeds and both starting players matched in two of four
-cases; the other two first diverged at an `orig` move from the same board.
-Deterministic search budgeting would be a separate behavioural change.
+Each line derives its own seed from `--seed` and advances it per game; both bots
+receive the game seed.  Lines alternate the starting player by line number, so
+with an even number of lines each bot starts half the games (4 × 25 gives each
+bot 50 first moves).  Each worker line is `<p0 time>:<results>:<p1 time>`.  The
+results are a progress bar: green `3`/`C` are player-0 wins by three-in-a-row and
+small-board count, red means player-0 losses, grey `D` is a draw, `F` marks a
+technical forfeit, and white `.` marks a game not yet played.  Each time field is
+a 10-cell bar (10 ms per cell) showing that bot's slowest move in the last
+completed game, with the `NNNNms` text right-justified over it: green below
+100 ms, a full red bar at 100 ms and above, and yellow unused cells.  Before the run
+both bots are asked for their `--HELLO` identity, which is shown in a banner, the
+live display and the result table.  Unless `--no-build` is given, the rig and
+both bot targets (`ai_negamax` as `D=0 L=0 A=0 E=1`) are rebuilt first.
+`--no-interactive` suppresses the display, and
+`RIG_LINES`/`RIG_GAMES_PER_LINE`/`RIG_BASE_SEED`/`RIG_RELAXED` override the
+defaults.
 
-To regenerate the report from saved data without playing games:
+The console result table is also written to `reports/multi-latest.log`; an
+existing file of that name is rotated to `reports/multi-latest.N.log` first.
+Raw per-line JSON and bot logs stay in `work/multi/latest/` (a prior run is
+archived as `work/multi/latest.N/`).
 
-```fish
-fish scripts/resummarize.fish
-fish scripts/resummarize.fish work/latest.2
-fish scripts/interpret_multi_csv.fish
-fish scripts/interpret_multi_csv.fish work/latest.2/summary.csv
-```
+The older `multi-rig.fish`, `summarize-rig.py`, `interpret_multi_csv.py`,
+`interpret_multi_csv.fish`, `resummarize.fish` and the GitHub dispatch/retrieve
+helpers have been removed; they drove the retired multi-game rig.
+`rotate-report.fish` remains the shared numbered-archive helper.
 
-`resummarize.fish` first rebuilds `summary.csv` and `games.csv` in the supplied
-run directory, then calls `interpret_multi_csv.fish` to publish the HTML.
-`interpret_multi_csv.fish` reads `work/latest/summary.csv` by default, or a
-supplied path, and rotates the existing HTML before publishing. These commands
-never play games. `summarize-rig.py` combines worker game CSVs and identities;
-`interpret_multi_csv.py` renders the self-contained chart and tables.
-`rotate-report.fish` is the shared numbered-archive helper.
+`fish scripts/tune-negamax.fish <MAX_SCORE> [games]` builds optimized bots with
+that evaluation budget and plays negamax against `ai_random`, reporting the
+worst first and later response times and the number of later moves over 100 ms.
+Raw per-game JSON and logs go to `work/tune-negamax/latest/`.
 
-For a single detailed game, use `fish scripts/instrument-one-game.fish`.
-It builds `ai_minimax` with local C&C support, requests `INSTRUMENT` through
-the rig, and uses `instrument-report.py` to publish
-`reports/instrument/report.html`. The rig receives turn summaries and every
-completed root-move score; raw turn/score CSVs and logs remain in
-`work/instrument/`. The bot no longer opens an instrumentation file. The
-HTML leads with a 9×9 board for each p0 decision: previous X/O moves, the
-latest completed score in each evaluated candidate cell, and the selected
-cell highlighted. The opponent's immediately preceding move has a purple
-`LAST` marker; closed small boards have X WON/O WON/DRAW badges and strong
-borders. The old timing chart and turn table remain below. The
-instrument run uses a 75 ms search budget to leave room for transmitting
-telemetry; it is for inspection, not strength comparison. A normal
-`multi-rig.fish` run rebuilds the plain bot before its batch.
-`work/instrument/assistant-view.md` is generated from the same game as a
-compact, text-first companion for analysis: board before each turn, master
-ownership, all completed candidate/depth scores, the chosen move and reply.
+`fish scripts/instrument-one-game.fish bot1 "bot1 params" bot2 "bot2 params"`
+runs one instrumented game through the single-game `gamerig` and publishes
+`reports/instrument/report.html`.  It builds `bot1` with `L=1`, runs
+`gamerig --instrument 0`, and keeps the raw JSON in `work/instrument/latest/`.
+The report shows one 9×9 board per instrumented move: the position before the
+move, the opponent's last move (purple `LAST`), every evaluated candidate's root
+score, our choice (yellow), and closed small boards badged X WON/O WON/DRAW.
+A short run summary (date/time, bot identity, winner, win reason, totals)
+follows.  `scripts/instrument-report.py <game.json> <report.html>` renders the
+same report from a saved JSON; it refuses a JSON whose header has no
+`instrumented` field.
+
+The older CSV-driven renderer (`instrument-context.py`) and the
+`turns/scores/games/moves.csv` files are gone, so
+`scripts/solve-position.py --moves-csv` no longer has an `all-moves.csv` to
+read.
 
 To investigate a saved position without replaying the game, use the Python
-workbench (zero-based row/column coordinates and zero-based `--ply`):
+workbench (zero-based row/column coordinates and zero-based `--ply`).  It needs
+a move-trace CSV (`ply,player,row,col`); the instrument flow no longer writes
+one, so supply a trace from another source:
 
 ```fish
 python3 -B scripts/solve-position.py --moves-csv work/instrument/all-moves.csv \
@@ -155,43 +122,18 @@ not necessarily the opponent's most delaying line.
 All commands above are run from the repository root. The old CSV reports from
 before this layout change were retained in `work/legacy-summary-reports/`.
 
-## Standard 1,000-game GitHub run
+## GitHub batch run
 
-From the repository root:
+The [Bot versus orig workflow](../.github/workflows/bot-vs-orig.yml) runs
+`scripts/multi-rig.py` on a runner and uploads `reports/` and
+`work/multi/latest/` as one artifact. Dispatch and collect it with the GitHub
+CLI:
 
 ```fish
-fish scripts/start-github-1000.fish
-fish scripts/github-status.fish
-fish scripts/retrieve-github-latest-1000.fish
-xdg-open reports/github-latest.html
+gh workflow run bot-vs-orig.yml -f games=1000 -f base_seed=20261001 -f request_id=manual
+gh run list --workflow bot-vs-orig.yml --limit 5
+gh run download <run-id> --name bot-vs-orig-<run-id> --dir work/github-download
 ```
 
-To run 100 games instead, substitute
-`fish scripts/start-github-1000.fish 100` for the first command; do not run
-both start commands.
-
-`start-github-1000.fish` does **not** commit or push. It refuses to launch if
-any source, build, workflow, or reporting file used by the runner has local
-changes, or if the current branch's HEAD differs from `origin/<branch>`.
-Commit and push those files yourself, then rerun the start command. It uses
-`gh workflow run` with 1,000 games by default, or the positive multiple of four
-you pass (for example, `100`). The value is a runtime workflow input, not a
-committed file change. Seed 20261001 and a unique request ID are also sent;
-the request and game count are saved in `work/github-request.txt`. This requires GitHub CLI (`gh`) to be
-installed and authenticated. The workflow checks for fish on `ubuntu-latest`
-and installs it if necessary.
-
-`github-status.fish` checks that exact request: queued, running, completed,
-or failed. It prints the run URL. If the run has completed successfully,
-`retrieve-github-latest-1000.fish` downloads its artifact, verifies the run
-ID and requested game count, then publishes `reports/github-latest.html` and
-`work/github-latest/`. Previous GitHub results become numbered
-`github-latest.N.html` / `work/github-latest.N/`. Local
-`reports/latest-analysis.html` and `work/latest/` are untouched. The report
-header identifies the GitHub Actions run and links to it. No command here
-automatically opens the report; `xdg-open` is explicit.
-
-The [Bot versus orig workflow](../.github/workflows/bot-vs-orig.yml) uploads
-the HTML and raw `work/latest/` data as one artifact. Its run start/finish and
-generation timestamps use the runner's local timezone (normally UTC), shown
-explicitly in the HTML.
+The guarded local dispatch/status/retrieve helpers and the `github-latest.html`
+report were removed with the retired multi-game rig.

@@ -4,7 +4,10 @@
 #include <stdbool.h>
 #include <limits.h>
 
-#define DEFAULT_SEED 1u
+/* Identity reported by `--HELLO`.  Increment the trailing number whenever this
+ * bot's behaviour or capabilities change.  The reply names the bot and any
+ * local command-and-control options it supports (this baseline supports none). */
+#define HELLO_TEXT "RANDOM001"
 
 /**
  * Auto-generated code below aims at helping you parse
@@ -13,19 +16,24 @@
 
 int main(int argc, char **argv)
 {
-    unsigned seed = DEFAULT_SEED;
+    if (argc >= 2 && strcmp(argv[1], "--HELLO") == 0) {
+        if (argc != 2) { fprintf(stderr, "--HELLO must be the only argument\n"); return 2; }
+        puts(HELLO_TEXT);
+        return 0;
+    }
+    unsigned seed;
     if (argc == 3 && strcmp(argv[1], "--seed") == 0) {
         const char *p = argv[2];
-        if (!*p) { fprintf(stderr, "Invalid seed arguments\n"); return 2; }
+        if (!*p) { fprintf(stderr, "bad seed\n"); return 2; }
         seed = 0;
         for (; *p; p++) {
-            if (*p < '0' || *p > '9') { fprintf(stderr, "Invalid seed arguments\n"); return 2; }
+            if (*p < '0' || *p > '9') { fprintf(stderr, "bad seed\n"); return 2; }
             unsigned digit = (unsigned)(*p - '0');
-            if (seed > (UINT_MAX - digit) / 10u) { fprintf(stderr, "Invalid seed arguments\n"); return 2; }
+            if (seed > (UINT_MAX - digit) / 10u) { fprintf(stderr, "bad seed\n"); return 2; }
             seed = seed * 10u + digit;
         }
-    } else if (argc != 1) {
-        fprintf(stderr, "Invalid command-line arguments\n");
+    } else {
+        fprintf(stderr, "missing seed\n");
         return 2;
     }
     int move_x[81], move_y[81];
