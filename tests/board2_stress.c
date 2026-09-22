@@ -204,7 +204,7 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
     uint64_t rng = master_seed + UINT64_C(0x9e3779b97f4a7c15) * (game + 1);
     uint64_t hash = UINT64_C(1469598103934665603);
     Move last = {0, 1};
-    unsigned player = 0;
+    board.next_player = 0;
     unsigned ply = 0;
     unsigned certified_players = 0;
     unsigned cert_positions = 0;
@@ -213,13 +213,14 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
     ref.winner = BOARD2_IN_PROGRESS;
 
     {
-        CHECK(game, ply, player == 0, "opening player mismatch");
+        CHECK(game, ply, board.next_player == 0, "opening player mismatch");
         unsigned opening = (unsigned)(next_random(&rng) % 81u);
         Move move = {(u8)(opening / 9u),
                      (onehot9)(1u << (opening % 9u))};
         bool legal[81] = {true};
         (void)legal;
-        board2_play(&board, move, player);
+        u8 player = (u8)board.next_player;
+        board2_play(&board, move);
         reference_play(&ref, move.subboard, move.local_bit, player, game, ply);
         check_state(&board, &ref, game, ply);
         hash = hash_state(hash, &board, player, move);
@@ -238,11 +239,10 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                 certificate_seen = true;
             }
         }
-        player ^= 1u;
     }
 
     while (board.winner == BOARD2_IN_PROGRESS) {
-        CHECK(game, ply, player == (ply & 1u), "player alternation mismatch");
+        CHECK(game, ply, board.next_player == (ply & 1u), "player alternation mismatch");
         bool legal[81] = {false};
         unsigned target = (unsigned)__builtin_ctz((unsigned)last.local_bit);
         mask9 closed = (mask9)(ref.u[0] | ref.u[1]);
@@ -296,7 +296,8 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                 (unsigned)__builtin_ctz((unsigned)chosen.local_bit);
             CHECK(game, ply, chosen_index < 81 && legal[chosen_index],
                   "chosen move not independently legal");
-            board2_play(&board, chosen, player);
+            u8 player = (u8)board.next_player;
+            board2_play(&board, chosen);
             reference_play(&ref, chosen.subboard, chosen.local_bit, player,
                            game, ply);
             check_state(&board, &ref, game, ply);
@@ -316,7 +317,7 @@ static unsigned play_game(unsigned game, uint64_t master_seed,
                 }
             }
         }
-        player ^= 1u;
+        
         ply++;
         CHECK(game, ply, ply <= 81, "game exceeded 81 plies");
     }

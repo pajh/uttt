@@ -46,6 +46,9 @@ typedef enum Board2Winner_e {
 typedef struct Board2_s {
     /* The nine local boards, marks[player][cell] with cell 0..8. */
     mask9 marks[2][9];
+    mask9 playable_subboards;
+    u16 next_player;
+    // The above is the 18 + 18 + 2+ 2 = 40 byte hash key
 
     /* U-board status planes.  Bit c of umarks[p] is status bit p of master cell
      * c: 00=open, 10/01=player-owned, 11=draw.  These are status planes, not
@@ -57,7 +60,7 @@ typedef struct Board2_s {
     mask9 cannot_claim[2];
 
     /* Subboards where the next move may legally be played. */
-    mask9 playable_subboards;
+    
 
     /* 0 ongoing, 1 player 0 winner, 2 player 1 winner, 3 final draw. */
     i8 winner;
@@ -433,11 +436,11 @@ static inline void board2_update_playable_subboards(Board2 *board, Move move)
  * only whether this move changed certificate input (`cannot_claim` or U
  * status); it is not a legality or move-success result.
  */
-static inline bool board2_play(Board2 *board, Move move ,u8 player)
+static inline bool board2_play(Board2 *board, Move move)
 {
     ASSERT(board != NULL);
     ASSERT(move.subboard < 9);
-    ASSERT(player < 2);
+
     ASSERT_1SHOT9(move.local_bit);
     ASSERT(board->winner == BOARD2_IN_PROGRESS);
     
@@ -445,7 +448,12 @@ static inline bool board2_play(Board2 *board, Move move ,u8 player)
     ASSERT_MASK9(occupied);
     ASSERT( (move.local_bit & occupied) == 0 );
     bool proof_changed = false;
+    
+    u8 player = (u8)board->next_player;
     u8 op = opponent(player);
+    ASSERT(player < 2);
+    board->next_player = op;
+
     onehot9 subboard_bit = onehot9_from_index(move.subboard);
 
     board->marks[player][move.subboard] |= move.local_bit;

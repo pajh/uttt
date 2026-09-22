@@ -332,12 +332,11 @@ static Score score_board(const Board2 *board)
     };
 }
 
-static bool has_certified_immediate_win(
-    const Board2 *board,
-    u8 player)
+static bool has_certified_immediate_win(const Board2 *board)
 {
     ASSERT(board != NULL);
     ASSERT(board->winner == BOARD2_IN_PROGRESS);
+    u8 player = (u8)board->next_player;
     ASSERT(player < 2);
 
     ValidMoves moves = valid_moves(board);
@@ -353,11 +352,7 @@ static bool has_certified_immediate_win(
             continue;
 
         Board2 after = *board;
-        board2_play(
-            &after,
-            move,
-            player
-        );
+        board2_play(&after, move);
 
         if (after.winner == (Board2Winner)(player + 1u))
             return true;
@@ -401,8 +396,7 @@ typedef struct SearchConfig_s {
 } SearchConfig;
 
 /* Score the already-constructed position from the side-to-move perspective. */
-static SearchResult negamax(const Board2 *board, u8 player_to_move,
-                            SearchConfig config) {
+static SearchResult negamax(const Board2 *board, SearchConfig config) {
     if (config.timed && HAVE_WE_TIMED_OUT())
         return (SearchResult){.timeout=true};
 
@@ -410,11 +404,11 @@ static SearchResult negamax(const Board2 *board, u8 player_to_move,
         if (board->winner == BOARD2_DRAW)
             return (SearchResult){.value=0,.forced_draw=true};
         return (SearchResult){
-            .value=board->winner == player_to_move + 1u
+            .value=board->winner == board->next_player + 1u
                 ? TERMINAL_SCORE : -TERMINAL_SCORE
         };
     }
-
+    u8 player_to_move = (u8)board->next_player;
     if (config.force_cert_check) {
         Score certified;
         if (certifiedScore(board, &certified)) {
@@ -438,9 +432,9 @@ static SearchResult negamax(const Board2 *board, u8 player_to_move,
 
     for (Move move; next_move(&moves, &move);) {
         Board2 child = *board;
-        bool proof_changed = board2_play(&child, move, player_to_move);
+        bool proof_changed = board2_play(&child, move);
         SearchResult child_result = negamax(
-            &child, opponent(player_to_move),
+            &child,
             (SearchConfig){config.depth - 1, config.timed, proof_changed});
         if (child_result.timeout) return child_result;
 
@@ -532,9 +526,9 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
             }
 
             Board2 child = *board;
-            board2_play(&child, root->move, 0);
+            board2_play(&child, root->move);
             SearchResult result = negamax(
-                &child, 1,
+                &child,
                 (SearchConfig){.depth=target_plies-1, .timed=true,
                                .force_cert_check=true});
             if (result.timeout) {
@@ -753,7 +747,7 @@ Move getStartMove(void) {
 Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
 {
     if (last_move.subboard != 0xFF)
-        board2_play(board, last_move, 1);
+        board2_play(board, last_move);
 
     evaluation_calls = 0;
     turn_cache_hits = 0;
@@ -763,7 +757,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
         Move forced = xy2move((u8)localRigForcedX(), (u8)localRigForcedY());
         if (!isLegalMove(forced, valid_moves))
             error("Local rig forced an illegal move\n");
-        board2_play(board, forced, 0);
+        board2_play(board, forced);
         return forced;
     }
 
@@ -771,7 +765,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
        START_RULE opening directly instead of searching. */
     if (last_move.subboard == 0xFF) {
         Move move = getStartMove();
-        board2_play(board, move, 0);
+        board2_play(board, move);
         return move;
     }
 
@@ -788,7 +782,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
         error("Selected illegal move\n");
     }
 
-    board2_play(board, my_move, 0);
+    board2_play(board, my_move);
     return my_move;
 }
 
