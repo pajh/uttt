@@ -73,7 +73,7 @@ printf '%s\n' \
     "bot2 literal parameters: $bot2_params" \
     "bot2 command (p1): $bot2_command" \
     "starting player: p0" \
-    "instrumented bot build: L=1 E=1 MAX_SCORE=20000" \
+    "instrumented bot build: L=1 E=1 MAX_SCORE=100000" \
     "diagnostic CFLAGS: $diagnostic_cflags" \
     "gamerig executable: ./bin/gamerig" \
     "logical gamerig options:" \
@@ -98,7 +98,7 @@ if test $status -ne 0
     exit $build_status
 end
 
-make -B D=1 L=1 A=1 E=1 MAX_SCORE=20000 "bin/$bot1" > "$work_dir/build-bot1.log" 2>&1
+make -B D=1 L=1 A=1 E=1 MAX_SCORE=500000 "bin/$bot1" > "$work_dir/build-bot1.log" 2>&1
 if test $status -ne 0
     set -l build_status $status
     echo "bot1 build failed" >&2
@@ -126,6 +126,12 @@ if not string match -q '*L1*' -- "$hello"
     echo "bot1 --HELLO does not advertise instrumentation (L1): $hello" >&2
     echo "Instrument work: $work_dir" >&2
     exit 2
+end
+
+# Start each game from an empty experiment log (creates it if absent) so the
+# bot only ever appends; it carries no file-lifecycle code.
+if set -q NEGAMAX_RESULTS; and test -n "$NEGAMAX_RESULTS"
+    truncate -s 0 -- "$NEGAMAX_RESULTS"
 end
 
 ./bin/gamerig "./bin/$bot1" "$bot1_params" "./bin/$bot2" "$bot2_params" 0 \
@@ -175,3 +181,8 @@ end
 echo 'Instrument game: PASS'
 echo "Instrument work: $work_dir"
 echo "Instrument report: $output/report.html"
+
+# Publish a CSV view of the binary experiment log, if one was configured.
+if set -q NEGAMAX_RESULTS; and test -n "$NEGAMAX_RESULTS"
+    python3 scripts/edata-csv.py "$NEGAMAX_RESULTS" "$NEGAMAX_RESULTS.csv"
+end

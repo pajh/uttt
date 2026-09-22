@@ -79,11 +79,26 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <search.h>
 
 #include "../engine/board2.h"
 #include "../engine/support.h"
+
+
+typedef struct SearchResult_s {
+    int value;
+    bool forced_draw;
+    bool timeout;
+} SearchResult;
+
+typedef struct SearchConfig_s {
+    u8 ply;
+    u8 stop_at_ply;
+    bool timed;
+    bool force_cert_check;  
+} SearchConfig;
 
 uint64_t start_time;
 double move_budget = MAX_TIME;
@@ -103,7 +118,7 @@ double getElaspedTime() {
     return ( (double)elasped ) / 1000000.0;
 }
 
-#include "../engine/hashmap.h"
+
 /* Game totals are reported only to the local rig, after stdin closes. */
 static unsigned long long game_search_us, game_positions, game_cache_hits;
 static unsigned long long game_cert_leaf_hits, game_cert_internal_hits;
@@ -112,7 +127,7 @@ static unsigned long turn_cache_hits;
 void error(const char *format, ...);
 
 // Globals
-HashMap* map;
+
 static unsigned long evaluation_calls;
 static bool evaluation_timeout = EVALUATION_TIMEOUT;
 static unsigned long max_score = MAX_SCORE;
@@ -142,6 +157,164 @@ static bool HAVE_WE_TIMED_OUT(void) {
     if (evaluation_timeout) return evaluation_calls >= max_score;
     return getElaspedTime() >= search_deadline;
 }
+
+/* HashMap support section*/
+
+#define TT_BITS 16
+#define TT_SIZE (1u << TT_BITS)
+#define TT_MASK (TT_SIZE - 1)
+
+#define TT_FORCED_DRAW 0x01
+
+typedef struct {
+    u64 hash;
+    i32 value;
+    u16 generation;
+    u8 flags;
+    u8 pad;
+} TTEntry;
+
+static TTEntry tt[TT_SIZE];
+static u16 tt_generation = 0;
+typedef struct {
+    u32 size;
+    u32 pid;
+    u32 tt_bits;
+    u64 tt_probes_by_depth[8];
+    u64 tt_hits_by_depth[8];
+    u64 tt_stores;
+    u64 tt_collisions;
+} EData;
+
+static u8 current_depth = 0;
+static EData edata;
+
+/* Number of elements in a fixed-size array member of edata.  The declaration is
+ * the only place a metric's extent is written. */
+#define EDATA_LEN(var) (sizeof edata.var / sizeof edata.var[0])
+
+/* Folds any position at or past the last element into that last element. */
+static inline size_t edata_index(size_t pos, size_t last)
+{
+    return pos < last ? pos : last;
+}
+
+/* Record one increment of an array-valued metric at position pos.  `var` is the
+ * member name only and must be a fixed-size array, not a pointer; resizing the
+ * array never touches a call site. */
+#define EDATA_LOG(var, pos) \
+    (edata.var[edata_index((size_t)(pos), EDATA_LEN(var) - 1)]++)
+
+#ifndef CG_GAME
+/* NEGAMAX_RESULTS names the binary experiment log.  It is captured once at
+ * startup; a NULL path is the single flag that disables all experiment output
+ * (and skips the getpid call).  A single write() to an O_APPEND fd keeps
+ * concurrent bot processes' records intact; the harness must create the file
+ * beforehand, as the bot carries no file-lifecycle code.  The summary tooling
+ * reads fixed-size EData records and derives per-turn diffs from the
+ * cumulative counters.  CG_GAME submission builds compile this away. */
+static const char *results_path;
+
+static void resultsLogStartup(void)
+{
+    results_path = getenv("NEGAMAX_RESULTS");
+    if (results_path == NULL || *results_path == '\0') {
+        results_path = NULL;
+        return;
+    }
+    edata.size = (u32)sizeof edata;
+    edata.pid = (u32)getpid();
+    edata.tt_bits = TT_BITS;
+}
+
+/* Append this turn's cumulative tt counters as one raw EData record. */
+static void logData(void)
+{
+    if (results_path == NULL) return;
+
+    int fd = open(results_path, O_WRONLY | O_APPEND);
+    if (fd < 0) return;
+
+    ssize_t written = write(fd, &edata, sizeof edata);
+    if (written != (ssize_t)sizeof edata) {
+        fprintf(stderr, "logData: short write %zd/%zu bytes\n",
+                written, sizeof edata);
+    }
+    close(fd);
+}
+#else
+#define resultsLogStartup() ((void)0)
+#define logData()           ((void)0)
+#endif
+
+
+static inline u64 hash_mix(u64 a, u64 b)
+{
+    __uint128_t r = (__uint128_t)a * (__uint128_t)b;
+    return (u64)r ^ (u64)(r >> 64);
+}
+
+static inline u64 board2_hash(const Board2 *board)
+{
+    static const u64 C0 = UINT64_C(0xa0761d6478bd642f);
+    static const u64 C1 = UINT64_C(0xe7037ed1a0b428db);
+    static const u64 C2 = UINT64_C(0x8ebc6af09c88c6e3);
+    static const u64 C3 = UINT64_C(0x589965cc75374cc3);
+    static const u64 C4 = UINT64_C(0x9e3779b97f4a7c15);
+    static const u64 C5 = UINT64_C(0xd6e8feb86659fd93);
+
+    u64 w[5];
+
+    memcpy(w, board, 40);
+
+    u64 a = hash_mix(w[0] ^ C0, w[1] ^ C1);
+    u64 b = hash_mix(w[2] ^ C2, w[3] ^ C3);
+    u64 c = hash_mix(w[4] ^ C4, C5);
+
+    return hash_mix(a ^ b ^ C4, c ^ C0);
+}
+
+static inline void tt_store(u64 hash, SearchResult result)
+{
+    TTEntry *entry = &tt[hash & TT_MASK];
+
+    if (entry->generation == tt_generation &&
+        entry->hash != hash)
+        edata.tt_collisions++;
+
+    entry->hash = hash;
+    entry->value = result.value;
+    entry->flags = result.forced_draw ? TT_FORCED_DRAW : 0;
+    entry->generation = tt_generation;
+
+    edata.tt_stores++;
+}
+
+static inline bool tt_find(u64 hash, SearchResult *result)
+{
+    TTEntry *entry = &tt[hash & TT_MASK];
+
+    EDATA_LOG(tt_probes_by_depth, current_depth);
+
+    if (entry->generation != tt_generation)
+        return false;
+
+    if (entry->hash != hash)
+        return false;
+
+    EDATA_LOG(tt_hits_by_depth, current_depth);
+
+    *result = (SearchResult){
+        .value = entry->value,
+        .forced_draw = (entry->flags & TT_FORCED_DRAW) != 0,
+        .timeout = false
+    };
+
+    return true;
+}
+
+
+// End of HashMap support section
 
 typedef struct Score_s {
     u16 p0;
@@ -383,20 +556,11 @@ static bool certifiedScore(const Board2 *board, Score *score) {
     return false;
 }
 
-typedef struct SearchResult_s {
-    int value;
-    bool forced_draw;
-    bool timeout;
-} SearchResult;
 
-typedef struct SearchConfig_s {
-    int depth;
-    bool timed;
-    bool force_cert_check;
-} SearchConfig;
 
 /* Score the already-constructed position from the side-to-move perspective. */
 static SearchResult negamax(const Board2 *board, SearchConfig config) {
+    current_depth = config.ply -1;
     if (config.timed && HAVE_WE_TIMED_OUT())
         return (SearchResult){.timeout=true};
 
@@ -420,10 +584,17 @@ static SearchResult negamax(const Board2 *board, SearchConfig config) {
         }
     }
 
-    if (config.depth == 0)
+    if (config.ply == config.stop_at_ply)
         return (SearchResult){
             .value=scoreForPlayer(score_board(board), player_to_move)
         };
+
+    // Is this position already in the hash table?
+    u64 hash = board2_hash(board);
+
+    SearchResult cached;
+    if (tt_find(hash, &cached))
+        return cached;
 
     ValidMoves moves = valid_moves(board);
  
@@ -435,7 +606,10 @@ static SearchResult negamax(const Board2 *board, SearchConfig config) {
         bool proof_changed = board2_play(&child, move);
         SearchResult child_result = negamax(
             &child,
-            (SearchConfig){config.depth - 1, config.timed, proof_changed});
+            (SearchConfig){.ply = config.ply + 1,
+                           .stop_at_ply = config.stop_at_ply,
+                           .timed = config.timed,
+                           .force_cert_check = proof_changed});
         if (child_result.timeout) return child_result;
 
         int value = -child_result.value;
@@ -446,7 +620,9 @@ static SearchResult negamax(const Board2 *board, SearchConfig config) {
         if (best_score == TERMINAL_SCORE) break;     
         if (!child_result.forced_draw && value != -TERMINAL_SCORE) forced_draw = false;
     } 
-    return (SearchResult){.value=best_score,.forced_draw=forced_draw && best_score == 0};
+    SearchResult result = (SearchResult){.value=best_score,.forced_draw=forced_draw && best_score == 0};
+    tt_store(hash, result);
+    return result;
 }
 
 enum RootProof {
@@ -511,6 +687,7 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
     for (int target_plies=4; !time_expired; target_plies+=2) {
 
         int searchable_roots = 0;
+        tt_generation++;
         for (int i=0;i<current.count;i++)
             searchable_roots += current.moves[i].proof == RootUnproved;
         if (searchable_roots == 0) break;
@@ -529,7 +706,7 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
             board2_play(&child, root->move);
             SearchResult result = negamax(
                 &child,
-                (SearchConfig){.depth=target_plies-1, .timed=true,
+                (SearchConfig){.ply=1, .stop_at_ply=target_plies, .timed=true,
                                .force_cert_check=true});
             if (result.timeout) {
                 time_expired = 1;
@@ -777,6 +954,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
 
     game_positions += evaluation_calls;
     game_cache_hits += turn_cache_hits;
+    logData();
 
     if (!isLegalMove(my_move, valid_moves)) {
         error("Selected illegal move\n");
@@ -827,6 +1005,8 @@ int main(int argc,char* argv[])
     } else {
         seedError("missing seed\n");
     }
+
+    resultsLogStartup();
 
 #ifdef CG_GAME
     fprintf(stderr, "Running in CodinGame\n"); 

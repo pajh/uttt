@@ -68,10 +68,10 @@ class GamerigTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        # A small evaluation budget keeps the instrumented games quick while
-        # still producing root candidates.
+        # Timed search (E=0) so the instrumented games stop at the wall-clock
+        # deadline and still publish root candidates.
         subprocess.run(
-            ["make", "-B", "L=1", "E=1", "MAX_SCORE=20000", "bin/ai_negamax"],
+            ["make", "-B", "L=1", "bin/ai_negamax"],
             cwd=ROOT,
             check=True,
             capture_output=True,
