@@ -98,7 +98,7 @@ if test $status -ne 0
     exit $build_status
 end
 
-make -B D=1 L=1 A=1 E=1 MAX_SCORE=500000 "bin/$bot1" > "$work_dir/build-bot1.log" 2>&1
+make -B D=1 L=1 A=1 E=1 MAX_SCORE=520000 "bin/$bot1" > "$work_dir/build-bot1.log" 2>&1
 if test $status -ne 0
     set -l build_status $status
     echo "bot1 build failed" >&2

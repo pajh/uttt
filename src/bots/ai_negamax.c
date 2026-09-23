@@ -165,6 +165,8 @@ static bool HAVE_WE_TIMED_OUT(void) {
 #define TT_MASK (TT_SIZE - 1)
 
 #define TT_FORCED_DRAW 0x01
+#define TT_MIN_PLY 2      // don't cache too near the root
+#define TT_MIN_TO_GO 2     // don't cache when too close to the leaf#
 
 typedef struct {
     u64 hash;
@@ -176,14 +178,22 @@ typedef struct {
 
 static TTEntry tt[TT_SIZE];
 static u16 tt_generation = 0;
+
 typedef struct {
     u32 size;
     u32 pid;
-    u32 tt_bits;
-    u64 tt_probes_by_depth[8];
-    u64 tt_hits_by_depth[8];
-    u64 tt_stores;
-    u64 tt_collisions;
+    u32 tt_min_ply;
+    u32 tt_min_to_go;
+    u64 tt_probes_by_depth[8]; /* EDATA_DELTA */
+    u64 tt_hits_by_depth[8]; /* EDATA_DELTA */
+    u64 tt_stores; /* EDATA_DELTA */
+    u64 tt_collisions; /* EDATA_DELTA */
+    u64 evaluations;
+    u64 peek_probes;
+    u64 peek_hits;
+    u64 evals_at_last_completed;
+    u16 attempted_ply;
+    u16 completed_ply;
 } EData;
 
 static u8 current_depth = 0;
@@ -224,7 +234,8 @@ static void resultsLogStartup(void)
     }
     edata.size = (u32)sizeof edata;
     edata.pid = (u32)getpid();
-    edata.tt_bits = TT_BITS;
+    edata.tt_min_ply = TT_MIN_PLY;
+    edata.tt_min_to_go = TT_MIN_TO_GO;
 }
 
 /* Append this turn's cumulative tt counters as one raw EData record. */
@@ -235,6 +246,9 @@ static void logData(void)
     int fd = open(results_path, O_WRONLY | O_APPEND);
     if (fd < 0) return;
 
+    // Anything that needs GATHERING goes here
+
+    edata.evaluations = evaluation_calls;
     ssize_t written = write(fd, &edata, sizeof edata);
     if (written != (ssize_t)sizeof edata) {
         fprintf(stderr, "logData: short write %zd/%zu bytes\n",
@@ -558,7 +572,11 @@ static bool certifiedScore(const Board2 *board, Score *score) {
 
 
 
-/* Score the already-constructed position from the side-to-move perspective. */
+/* * * * * * * * * * * * * * * * * * * * * * *  * * * * * * * * * * * * * * * * 
+                                 N E G A M A X 
+Score the already-constructed position from the side-to-move perspective. 
+
+* * * * * * * * * * * * * * * * * * * * * *  * * * * * * * * * * * * * * * **/
 static SearchResult negamax(const Board2 *board, SearchConfig config) {
     current_depth = config.ply -1;
     if (config.timed && HAVE_WE_TIMED_OUT())
@@ -584,18 +602,28 @@ static SearchResult negamax(const Board2 *board, SearchConfig config) {
         }
     }
 
-    if (config.ply == config.stop_at_ply)
+    if (config.ply == config.stop_at_ply) {
+        /* Selectively extend the horizon by one move only for an exact immediate win. */
+        edata.peek_probes++;
+        if (has_certified_immediate_win(board)) {
+            edata.peek_hits++;
+            return (SearchResult){.value=TERMINAL_SCORE};
+        }
         return (SearchResult){
             .value=scoreForPlayer(score_board(board), player_to_move)
         };
+    }
+    int to_go = config.stop_at_ply - config.ply;
+    bool use_tt = config.ply >= TT_MIN_PLY && to_go >= TT_MIN_TO_GO;
+    u64 hash = 0;
+    if (use_tt) {
+        // Is this position already in the hash table?
+        hash = board2_hash(board);
 
-    // Is this position already in the hash table?
-    u64 hash = board2_hash(board);
-
-    SearchResult cached;
-    if (tt_find(hash, &cached))
-        return cached;
-
+        SearchResult cached;
+        if (tt_find(hash, &cached))
+            return cached;
+    }
     ValidMoves moves = valid_moves(board);
  
     int best_score = -1000000;
@@ -621,7 +649,7 @@ static SearchResult negamax(const Board2 *board, SearchConfig config) {
         if (!child_result.forced_draw && value != -TERMINAL_SCORE) forced_draw = false;
     } 
     SearchResult result = (SearchResult){.value=best_score,.forced_draw=forced_draw && best_score == 0};
-    tt_store(hash, result);
+    if (use_tt) tt_store(hash, result);
     return result;
 }
 
@@ -684,10 +712,13 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
        us. Only a fully completed depth becomes eligible for final scoring. */
     int time_expired = 0;
     bool completed_depth = false;
-    for (int target_plies=4; !time_expired; target_plies+=2) {
+    edata.evals_at_last_completed = 0;
+    for (int target_plies=4; !time_expired; target_plies+=1) {
 
         int searchable_roots = 0;
         tt_generation++;
+        edata.attempted_ply = target_plies;
+        
         for (int i=0;i<current.count;i++)
             searchable_roots += current.moves[i].proof == RootUnproved;
         if (searchable_roots == 0) break;
@@ -746,7 +777,9 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
            index so a timed-out iteration can be reconciled without remapping. */
         previous = current;
         completed_depth = true;
-
+        edata.completed_ply = target_plies;
+        edata.evals_at_last_completed = evaluation_calls;
+        
         /* The next attempt starts with fresh ordinary scores, while proofs
            remain valid across depths. */
         for (int i=0;i<current.count;i++) {
@@ -927,6 +960,8 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
         board2_play(board, last_move);
 
     evaluation_calls = 0;
+    edata.peek_probes = 0;
+    edata.peek_hits = 0;
     turn_cache_hits = 0;
     search_nodes = 0;
 
