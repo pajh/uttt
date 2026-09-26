@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sub-board score experiment</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, sans-serif;
+      background: #f2f4f7;
+      color: #172033;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 2rem;
+    }
+
+    .page {
+      width: min(100%, 1080px);
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 0.5rem;
+    }
+
+    .intro {
+      max-width: 65ch;
+      margin: 0 0 1.5rem;
+      color: #475569;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(17rem, 22rem);
+      align-items: start;
+      gap: 1.5rem;
+    }
+
+    .board-panel,
+    .score-panel {
+      min-width: 0;
+      padding: 1rem;
+      background: white;
+      border: 1px solid #cbd5e1;
+    }
+
+    .board-panel h2,
+    .score-panel h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1.1rem;
+    }
+
+    .local-board {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+      width: min(100%, 540px);
+      aspect-ratio: 1;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      background: #20283a;
+    }
+
+    .cell {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      border: 0;
+      border-radius: 0;
+      cursor: pointer;
+      font: inherit;
+      color: #172033;
+      background: #f8fafc;
+    }
+
+    .cell:hover {
+      background: #e2e8f0;
+    }
+
+    .cell:focus-visible,
+    .reset:focus-visible {
+      outline: 3px solid #f59e0b;
+      outline-offset: 2px;
+    }
+
+    .cell.x {
+      color: #2563eb;
+      background: #dbeafe;
+    }
+
+    .cell.o {
+      color: #dc2626;
+      background: #fee2e2;
+    }
+
+    .cell .mark {
+      display: block;
+      font-size: clamp(1.8rem, 8vw, 4rem);
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .cell .preview {
+      position: absolute;
+      right: 0.4rem;
+      bottom: 0.35rem;
+      color: #166534;
+      font-size: clamp(0.7rem, 2vw, 0.9rem);
+      font-weight: 600;
+      line-height: 1;
+    }
+
+    .cell .preview.unavailable {
+      color: #64748b;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .reset {
+      padding: 0.55rem 0.8rem;
+      border: 1px solid #94a3b8;
+      border-radius: 0.25rem;
+      color: #172033;
+      background: #f8fafc;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .reset:hover {
+      background: #e2e8f0;
+    }
+
+    .help,
+    .legend,
+    .preview-note {
+      margin: 0.75rem 0 0;
+      color: #475569;
+      font-size: 0.9rem;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .legend .x-key {
+      color: #2563eb;
+      font-weight: 700;
+    }
+
+    .legend .o-key {
+      color: #dc2626;
+      font-weight: 700;
+    }
+
+    /* The three headline values sit side by side above the X detail list:
+       the pair plus the difference between them. */
+    .score-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.5rem;
+      margin: 0 0 0.5rem;
+    }
+
+    .score-box {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      padding: 0.6rem 0.5rem;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      text-align: center;
+    }
+
+    .score-box.diff {
+      border-color: #166534;
+      background: #f0fdf4;
+    }
+
+    .score-box-label {
+      color: #475569;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .score-box-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+
+    .score-box.diff .score-box-value {
+      color: #166534;
+    }
+
+    .score-box-value.unavailable {
+      color: #64748b;
+    }
+
+    .strip-note {
+      margin: 0 0 0.75rem;
+      color: #475569;
+      font-size: 0.85rem;
+    }
+
+    .metrics {
+      display: grid;
+      gap: 0.6rem;
+      margin: 0;
+    }
+
+    .metric {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-bottom: 0.6rem;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .metric dt,
+    .metric dd {
+      margin: 0;
+    }
+
+    .metric dt {
+      color: #475569;
+    }
+
+    .metric dd {
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .score-value {
+      color: #1d4ed8;
+      font-size: 1.5rem;
+    }
+
+    .status {
+      margin: 1rem 0 0;
+      padding: 0.75rem;
+      border-left: 4px solid #2563eb;
+      background: #eff6ff;
+      font-weight: 600;
+    }
+
+    .status.null-score {
+      border-left-color: #64748b;
+      background: #f1f5f9;
+    }
+
+    .refutation {
+      min-height: 1.5rem;
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding: 1rem;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .local-board {
+        width: min(100%, 540px);
+      }
+
+      .score-panel {
+        order: -1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Sub-board score</h1>
+    <p class="intro">
+      Edit one local 3×3 board and inspect the X sub-board score: the number of
+      future X moves still needed to finish a live line, less the protection
+      credit and one twentieth for every improving move. Lower is better, this is
+      a distance, not a normalized higher-is-better score. Every calculation runs
+      in integer twentieths and is converted for display only.
+    </p>
+
+    <div class="workspace">
+      <section class="board-panel" aria-labelledby="editor-heading">
+        <h2 id="editor-heading">Local position editor</h2>
+        <div
+          id="board"
+          class="local-board"
+          role="group"
+          aria-label="Editable local sub-board"
+          aria-describedby="editor-help"
+        ></div>
+        <div class="controls">
+          <button id="reset" class="reset" type="button">Reset board</button>
+        </div>
+        <p id="editor-help" class="help">
+          Click a cell to cycle Empty → X → O → Empty. Editing is allowed
+          even after a line is completed; this is not alternating-turn play.
+        </p>
+        <p class="legend" aria-label="Player key">
+          <span><span class="x-key">X</span> player 0</span>
+          <span><span class="o-key">O</span> player 1</span>
+        </p>
+      </section>
+
+      <aside class="score-panel" aria-labelledby="score-heading">
+        <h2 id="score-heading">X sub-board score</h2>
+        <div class="score-strip" aria-label="Current board scores and difference">
+          <div class="score-box">
+            <span class="score-box-label">MY_SCORE (X)</span>
+            <span id="my-score" class="score-box-value">—</span>
+          </div>
+          <div class="score-box">
+            <span class="score-box-label">HIS_SCORE (O)</span>
+            <span id="his-score" class="score-box-value">—</span>
+          </div>
+          <div class="score-box diff">
+            <span class="score-box-label">DIFF_SCORE (X − O)</span>
+            <span id="diff-score" class="score-box-value">—</span>
+          </div>
+        </div>
+        <p class="strip-note">
+          Scores are distances in moves, so lower is better. DIFF_SCORE is
+          MY_SCORE minus HIS_SCORE: a negative difference favours X, a positive
+          one favours O, and 0 means the two are level. A dash means that player
+          has no numeric score on this board, so no difference exists.
+        </p>
+        <dl class="metrics">
+          <div class="metric">
+            <dt>Final X score</dt>
+            <dd id="final-score" class="score-value">—</dd>
+          </div>
+          <div class="metric">
+            <dt>Raw distance</dt>
+            <dd id="raw-score">—</dd>
+          </div>
+          <div class="metric">
+            <dt>Protected</dt>
+            <dd id="protected-score">—</dd>
+          </div>
+          <div class="metric">
+            <dt>protect_score</dt>
+            <dd id="protect-score">—</dd>
+          </div>
+          <div class="metric">
+            <dt>Improving moves</dt>
+            <dd id="improving-score">—</dd>
+          </div>
+          <div class="metric">
+            <dt>O reply refutation</dt>
+            <dd id="refutation-score" class="refutation">—</dd>
+          </div>
+        </dl>
+        <p id="score-status" class="status" role="status" aria-live="polite" aria-atomic="true">
+          Open position.
+        </p>
+        <p id="preview-note" class="preview-note">
+          Each empty cell previews the same scorer after placing X there.
+        </p>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    "use strict";
+
+    // A null cell is empty; X and O use their player indices directly.
+    const EMPTY = null;
+    const X_PLAYER = 0;
+    const O_PLAYER = 1;
+
+    // The pure scorer is integer arithmetic in twentieths of one move, so
+    // every comparison inside it is exact and no rounding can leak into a
+    // decision. A raw distance of 1, 2 or 3 is 20, 40 or 60 units; protection
+    // subtracts a flat 5 units (0.25); every improving move subtracts 1 unit
+    // (0.05). Units are divided by UNITS_PER_DISTANCE for display only.
+    const UNITS_PER_DISTANCE = 20;
+    const PROTECTION_UNITS = 5;
+    const IMPROVING_MOVE_UNITS = 1;
+
+    function opponentOf(player) {
+      return player === X_PLAYER ? O_PLAYER : X_PLAYER;
+    }
+
+    // The row/column layout is the same as the other Ultimate board page.
+    const CELL_LAYOUT = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8]
+    ];
+
+    const WINNING_LINES = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8],
+      [0, 3, 6],
+      [1, 4, 7],
+      [2, 5, 8],
+      [0, 4, 8],
+      [2, 4, 6]
+    ];
+
+    function isMark(mark) {
+      return mark === EMPTY || mark === X_PLAYER || mark === O_PLAYER;
+    }
+
+    function markName(mark) {
+      if (mark === X_PLAYER) {
+        return "X";
+      }
+      if (mark === O_PLAYER) {
+        return "O";
+      }
+      return "Empty";
+    }
+
+    function cellPosition(index) {
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 3; column++) {
+          if (CELL_LAYOUT[row][column] === index) {
+            return { row, column };
+          }
+        }
+      }
+      return { row: 0, column: 0 };
+    }
+
+    function winningLinesFor(cells, player) {
+      return WINNING_LINES.filter((line) =>
+        line.every((cell) => cells[cell] === player)
+      );
+    }
+
+    // Status kinds are relative to the requested player, so one code path can
+    // score X and O and the player-symmetry invariant stays testable.
+    // "invalid" and "both-win" describe the board itself; the other kinds
+    // describe the requested player's situation.
+    function classifyBoard(cells, player = X_PLAYER) {
+      if (
+        !Array.isArray(cells) ||
+        cells.length !== 9 ||
+        !cells.every(isMark)
+      ) {
+        return {
+          kind: "invalid",
+          reason: "the editor contains an invalid cell value"
+        };
+      }
+
+      const xLines = winningLinesFor(cells, X_PLAYER);
+      const oLines = winningLinesFor(cells, O_PLAYER);
+      const playerLines = player === X_PLAYER ? xLines : oLines;
+      const opponentLines = player === X_PLAYER ? oLines : xLines;
+      const opponent = opponentOf(player);
+
+      // This can only be produced by manual editing, but it must never be
+      // treated as an ordinary terminal win.
+      if (playerLines.length > 0 && opponentLines.length > 0) {
+        return {
+          kind: "both-win",
+          reason: "both players have completed lines; this is an invalid manual position"
+        };
+      }
+      if (playerLines.length > 0) {
+        return {
+          kind: "self-win",
+          reason: `${markName(player)} has a completed line; the current ${markName(player)} score is null`
+        };
+      }
+      if (opponentLines.length > 0) {
+        return {
+          kind: "opponent-win",
+          reason: `${markName(opponent)} has a completed line; the current ${markName(player)} score is null`
+        };
+      }
+
+      const emptyCount = cells.reduce(
+        (count, mark) => count + (mark === EMPTY ? 1 : 0),
+        0
+      );
+      if (emptyCount === 0) {
+        return {
+          kind: "draw",
+          reason: `the board is full and drawn; the current ${markName(player)} score is null`
+        };
+      }
+
+      // A live line for the player is any line with no opponent mark. Its
+      // distance is the number of still-empty cells that the player would have
+      // to fill. Completed lines were handled above, so every live line here
+      // has at least one empty.
+      let rawDistance = Infinity;
+      for (const line of WINNING_LINES) {
+        if (line.some((cell) => cells[cell] === opponent)) {
+          continue;
+        }
+
+        const missing = line.reduce(
+          (count, cell) => count + (cells[cell] === EMPTY ? 1 : 0),
+          0
+        );
+        if (missing > 0 && missing < rawDistance) {
+          rawDistance = missing;
+        }
+      }
+
+      if (rawDistance === Infinity) {
+        return {
+          kind: "unwinnable",
+          reason: `${markName(player)} has no live line; the current ${markName(player)} score is null`
+        };
+      }
+
+      return {
+        kind: "open",
+        rawDistance,
+        reason: "open position"
+      };
+    }
+
+    // Raw status only, with no protection test and no bonus. This is the
+    // minimum the hostile-reply test needs about one opponent reply, and it
+    // never assigns a numeric value to a terminal position.
+    function evaluateRaw(cells, player) {
+      const classification = classifyBoard(cells, player);
+      return {
+        ...classification,
+        rawDistance:
+          classification.kind === "open" ? classification.rawDistance : null
+      };
+    }
+
+    function refutationDescription(reply, player, originalDistance) {
+      switch (reply.kind) {
+        case "both-win":
+          return "both players win";
+        case "self-win":
+          return `${markName(player)} wins`;
+        case "opponent-win":
+          return `${markName(opponentOf(player))} wins`;
+        case "draw":
+          return "the board becomes drawn";
+        case "unwinnable":
+          return `${markName(player)} becomes unwinnable`;
+        case "invalid":
+          return "the reply is invalid";
+        default:
+          return `${markName(player)} raw distance becomes ${reply.rawDistance}, worse than ${originalDistance}`;
+      }
+    }
+
+    // Protection is deliberately defined by testing each distinct empty cell
+    // once. Multiple lines through one cell are still one opponent action. It
+    // is only asked about raw distances 1 and 2: a 3-away position is never
+    // protected and therefore earns no credit.
+    function protectionTest(cells, player, rawDistance) {
+      if (rawDistance !== 1 && rawDistance !== 2) {
+        return { protected: null, refutation: null };
+      }
+
+      const opponent = opponentOf(player);
+      for (let cell = 0; cell < cells.length; cell++) {
+        if (cells[cell] !== EMPTY) {
+          continue;
+        }
+
+        const replyCells = cells.slice();
+        replyCells[cell] = opponent;
+        const reply = evaluateRaw(replyCells, player);
+        if (reply.kind !== "open" || reply.rawDistance > rawDistance) {
+          return {
+            protected: false,
+            refutation: {
+              cell,
+              kind: reply.kind,
+              rawDistance: reply.rawDistance,
+              description: refutationDescription(reply, player, rawDistance)
+            }
+          };
+        }
+      }
+
+      return { protected: true, refutation: null };
+    }
+
+    // The raw distance and its protection credit, in units. This helper is the
+    // only source of protectUnits, and it contains no improving-move term, so a
+    // child's protectUnits can be read without scoring that child's children.
+    function openMeasure(cells, player) {
+      const raw = evaluateRaw(cells, player);
+      if (raw.kind !== "open") {
+        return {
+          ...raw,
+          rawUnits: null,
+          protected: null,
+          protectUnits: null,
+          refutation: null
+        };
+      }
+
+      const { protected: isProtected, refutation } = protectionTest(
+        cells,
+        player,
+        raw.rawDistance
+      );
+      const rawUnits = raw.rawDistance * UNITS_PER_DISTANCE;
+
+      return {
+        ...raw,
+        rawUnits,
+        protected: isProtected,
+        protectUnits: rawUnits - (isProtected === true ? PROTECTION_UNITS : 0),
+        refutation
+      };
+    }
+
+    // Every distinct legal empty cell is one candidate move for the player. It
+    // counts as improving when the hypothetical board is won, or when it stays
+    // open with strictly lower protectUnits than the parent. Any other null or
+    // terminal outcome counts for nothing. Only openMeasure is called here, so
+    // this pass cannot recurse.
+    function countImprovingMoves(cells, player, protectUnits) {
+      let improvingCount = 0;
+
+      for (let cell = 0; cell < cells.length; cell++) {
+        if (cells[cell] !== EMPTY) {
+          continue;
+        }
+
+        const childCells = cells.slice();
+        childCells[cell] = player;
+        const child = openMeasure(childCells, player);
+        if (
+          child.kind === "self-win" ||
+          (child.kind === "open" && child.protectUnits < protectUnits)
+        ) {
+          improvingCount += 1;
+        }
+      }
+
+      return improvingCount;
+    }
+
+    function scoreBoard(cells, player = X_PLAYER) {
+      const measure = openMeasure(cells, player);
+      if (measure.kind !== "open") {
+        return { ...measure, improvingCount: null, scoreUnits: null };
+      }
+
+      const improvingCount = countImprovingMoves(
+        cells,
+        player,
+        measure.protectUnits
+      );
+
+      return {
+        ...measure,
+        improvingCount,
+        scoreUnits: measure.protectUnits - improvingCount * IMPROVING_MOVE_UNITS
+      };
+    }
+
+    // The state object is the only source of truth. Rendering reads these
+    // cells and calls these methods; it never reads mark text back from DOM.
+    const state = {
+      cells: Array(9).fill(EMPTY),
+
+      reset() {
+        this.cells = Array(9).fill(EMPTY);
+      },
+
+      cycleCell(cell) {
+        if (!Number.isInteger(cell) || cell < 0 || cell >= this.cells.length) {
+          return false;
+        }
+
+        if (this.cells[cell] === EMPTY) {
+          this.cells[cell] = X_PLAYER;
+        } else if (this.cells[cell] === X_PLAYER) {
+          this.cells[cell] = O_PLAYER;
+        } else {
+          this.cells[cell] = EMPTY;
+        }
+        return true;
+      },
+
+      clone() {
+        const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this);
+        copy.cells = this.cells.slice();
+        return copy;
+      },
+
+      withCell(cell, player) {
+        const copy = this.clone();
+        if (
+          !Number.isInteger(cell) ||
+          cell < 0 ||
+          cell >= copy.cells.length ||
+          (player !== X_PLAYER && player !== O_PLAYER)
+        ) {
+          return null;
+        }
+        copy.cells[cell] = player;
+        return copy;
+      },
+
+      score() {
+        return scoreBoard(this.cells);
+      },
+
+      previewAt(cell) {
+        if (!Number.isInteger(cell) || this.cells[cell] !== EMPTY) {
+          return null;
+        }
+        const previewState = this.withCell(cell, X_PLAYER);
+        return previewState === null ? null : previewState.score();
+      }
+    };
+
+    const boardElement = document.getElementById("board");
+    const resetElement = document.getElementById("reset");
+    const finalScoreElement = document.getElementById("final-score");
+    const rawScoreElement = document.getElementById("raw-score");
+    const protectedScoreElement = document.getElementById("protected-score");
+    const protectScoreElement = document.getElementById("protect-score");
+    const improvingScoreElement = document.getElementById("improving-score");
+    const refutationScoreElement = document.getElementById("refutation-score");
+    const myScoreElement = document.getElementById("my-score");
+    const hisScoreElement = document.getElementById("his-score");
+    const diffScoreElement = document.getElementById("diff-score");
+    const scoreStatusElement = document.getElementById("score-status");
+    const previewNoteElement = document.getElementById("preview-note");
+
+    // The only floating-point step in the page: integer units become a
+    // two-decimal display string. No comparison ever uses these values.
+    function formatScore(units) {
+      return units === null ? "—" : (units / UNITS_PER_DISTANCE).toFixed(2);
+    }
+
+    function formatUnits(units) {
+      return units === null ? "—" : `${units} units (${formatScore(units)})`;
+    }
+
+    function formatDistance(distance) {
+      return distance === null ? "—" : String(distance);
+    }
+
+    // MY_SCORE minus HIS_SCORE, subtracted once in integer units so the
+    // two-decimal display can never turn a real difference into a 0.00 tie. A
+    // null operand means that player has no numeric score, so the difference
+    // does not exist and stays null.
+    function diffUnits(xUnits, oUnits) {
+      return xUnits === null || oUnits === null ? null : xUnits - oUnits;
+    }
+
+    // The empty-cell preview is scored for both players on the same
+    // hypothetical board: one X in the clicked cell, then MY_SCORE − HIS_SCORE.
+    function previewDiff(cells, cell) {
+      const previewCells = cells.slice();
+      previewCells[cell] = X_PLAYER;
+
+      const xUnits = scoreBoard(previewCells, X_PLAYER).scoreUnits;
+      const oUnits = scoreBoard(previewCells, O_PLAYER).scoreUnits;
+      return { xUnits, oUnits, diffUnits: diffUnits(xUnits, oUnits) };
+    }
+
+    function previewExplanation(preview) {
+      if (preview === null) {
+        return "Preview unavailable: that cell cannot receive an X mark.";
+      }
+      if (preview.scoreUnits !== null) {
+        return `After placing X: final score ${formatScore(preview.scoreUnits)}` +
+          ` (${preview.improvingCount} improving moves, protect_score ${preview.protectUnits}, raw ${preview.rawDistance},` +
+          ` protected ${preview.protected === null ? "N/A" : preview.protected ? "Yes" : "No"}).`;
+      }
+
+      switch (preview.kind) {
+        case "self-win":
+          return "Preview blank: the resulting position has an X win and is closed, so its score is null.";
+        case "opponent-win":
+          return "Preview blank: the resulting position has an O win and a null X score.";
+        case "both-win":
+          return "Preview blank: the hypothetical position has both players winning and is invalid.";
+        case "draw":
+          return "Preview blank: the resulting board is full and drawn, so X is unwinnable.";
+        case "unwinnable":
+          return "Preview blank: X has no live line in the resulting position.";
+        default:
+          return "Preview blank: the resulting position has no numeric X score.";
+      }
+    }
+
+    function statusText(score) {
+      if (score.kind === "open") {
+        if (score.protected === null) {
+          return `Open position. Raw distance ${score.rawDistance}; protection is not applied to 3-away positions.`;
+        }
+        if (score.protected) {
+          return `Open position. X is protected; every O reply keeps the raw distance at most ${score.rawDistance}.`;
+        }
+        return `Open position. X is not protected: O reply cell ${score.refutation.cell} — ${score.refutation.description}.`;
+      }
+
+      return `${score.reason.charAt(0).toUpperCase()}${score.reason.slice(1)}.`;
+    }
+
+    // The three headline values for the board as it stands now, scored
+    // through the same symmetric scorer for X and for O.
+    function renderComparison() {
+      const my = scoreBoard(state.cells, X_PLAYER).scoreUnits;
+      const his = scoreBoard(state.cells, O_PLAYER).scoreUnits;
+      const diff = diffUnits(my, his);
+
+      myScoreElement.textContent = formatScore(my);
+      hisScoreElement.textContent = formatScore(his);
+      diffScoreElement.textContent = formatScore(diff);
+      diffScoreElement.classList.toggle("unavailable", diff === null);
+    }
+
+    function renderScore(score) {
+      finalScoreElement.textContent = formatScore(score.scoreUnits);
+      rawScoreElement.textContent = formatDistance(score.rawDistance);
+
+      if (score.kind !== "open") {
+        protectedScoreElement.textContent = "—";
+        protectScoreElement.textContent = "—";
+        improvingScoreElement.textContent = "—";
+        refutationScoreElement.textContent = "—";
+      } else {
+        improvingScoreElement.textContent = `${score.improvingCount} × 0.05`;
+        protectScoreElement.textContent = formatUnits(score.protectUnits);
+        if (score.protected === null) {
+          protectedScoreElement.textContent = "N/A (3-away)";
+          refutationScoreElement.textContent = "Not evaluated";
+        } else {
+          protectedScoreElement.textContent = score.protected ? "Yes" : "No";
+          refutationScoreElement.textContent = score.refutation === null
+            ? "None"
+            : `Cell ${score.refutation.cell}: ${score.refutation.description}`;
+        }
+      }
+
+      scoreStatusElement.textContent = statusText(score);
+      scoreStatusElement.classList.toggle("null-score", score.kind !== "open");
+
+      if (score.kind === "open") {
+        previewNoteElement.textContent =
+          "Each empty cell previews DIFF_SCORE after placing X there, that is MY_SCORE minus HIS_SCORE, " +
+          "and shows a dash when either player has no numeric score on the resulting board.";
+      } else {
+        previewNoteElement.textContent =
+          `The current position has a null X score (${score.reason}). ` +
+          "Any available empty-cell previews are still calculated independently; their dashes use the same rule.";
+      }
+    }
+
+    function renderBoard() {
+      boardElement.replaceChildren();
+
+      for (let cell = 0; cell < state.cells.length; cell++) {
+        const mark = state.cells[cell];
+        const { row, column } = cellPosition(cell);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "cell";
+        button.dataset.cell = String(cell);
+        button.dataset.mark = mark === EMPTY ? "empty" : markName(mark);
+
+        if (mark === X_PLAYER) {
+          button.classList.add("x");
+        } else if (mark === O_PLAYER) {
+          button.classList.add("o");
+        }
+
+        const markElement = document.createElement("span");
+        markElement.className = "mark";
+        markElement.textContent = mark === EMPTY ? "" : markName(mark);
+        button.append(markElement);
+
+        if (mark === EMPTY) {
+          const preview = state.previewAt(cell);
+          const diff = previewDiff(state.cells, cell);
+          const previewText = formatScore(diff.diffUnits);
+          const previewElement = document.createElement("span");
+          previewElement.className = "preview";
+          previewElement.textContent = previewText;
+          if (diff.diffUnits === null) {
+            previewElement.classList.add("unavailable");
+          }
+          button.append(previewElement);
+
+          const explanation = previewExplanation(preview);
+          button.title = explanation;
+          button.setAttribute(
+            "aria-label",
+            `Cell ${cell}, row ${row + 1}, column ${column + 1}: empty. ` +
+            `Click to place X. DIFF_SCORE after that X, X score ${formatScore(diff.xUnits)}, ` +
+            `O score ${formatScore(diff.oUnits)}: ${previewText}. ${explanation}`
+          );
+        } else {
+          const nextMark = mark === X_PLAYER ? "O" : "Empty";
+          button.title = `Cell ${cell}, row ${row + 1}, column ${column + 1}: ${markName(mark)}. Click to cycle to ${nextMark}.`;
+          button.setAttribute(
+            "aria-label",
+            `Cell ${cell}, row ${row + 1}, column ${column + 1}: ${markName(mark)}. Click to cycle to ${nextMark}.`
+          );
+        }
+
+        button.addEventListener("click", () => {
+          state.cycleCell(cell);
+          render();
+        });
+        boardElement.append(button);
+      }
+    }
+
+    function render() {
+      renderBoard();
+      renderScore(state.score());
+      renderComparison();
+    }
+
+    resetElement.addEventListener("click", () => {
+      state.reset();
+      render();
+    });
+
+    // Expose only the pure scorer for small isolated checks and debugging.
+    // scoreBoard takes the requested player so the player-symmetry invariant
+    // can be checked; the editor itself always scores X.
+    window.subboardScoreExperiment = {
+      scoreBoard,
+      openMeasure,
+      evaluateRaw,
+      classifyBoard
+    };
+
+    render();
+  </script>
+</body>
+</html>

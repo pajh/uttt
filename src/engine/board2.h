@@ -46,7 +46,7 @@ typedef enum Board2Winner_e {
 typedef struct Board2_s {
     /* The nine local boards, marks[player][cell] with cell 0..8. */
     mask9 marks[2][9];
-    mask9 playable_subboards;
+    mask9 playable_subboards; /* Subboards where the next move may legally be played. */
     u16 next_player;
     // The above is the 18 + 18 + 2+ 2 = 40 byte hash key
 
@@ -55,21 +55,38 @@ typedef struct Board2_s {
      * owner masks; owner[p] = umarks[p] & ~umarks[p^1]. */
     mask9 umarks[2];
 
-    /* A bit means local geometry proves that player p has no unblocked line
-     * in that local board.  These masks start at zero and only gain bits. */
-    mask9 cannot_claim[2];
-
-    /* Subboards where the next move may legally be played. */
     
+    /* cannot_claim[p] :
+    * Bit c means player p can never newly claim U-cell c.
+    *
+    * Starts at zero and is monotonic (bits only change 0 -> 1).
+    * For an open sub-board, the bit is set once local geometry proves
+    * player p has no remaining winning line.
+    *
+    * When a sub-board closes by win or draw, the bit is set for both
+    * players. Therefore cannot_claim alone does not distinguish:
+    *   - player already owns the cell,
+    *   - opponent owns it,
+    *   - the cell is drawn,
+    *   - the board remains open but is unwinnable by this player.
+    *
+    * Use umarks together with cannot_claim when that distinction matters.
+    */
+    mask9 cannot_claim[2];
 
     /* 0 ongoing, 1 player 0 winner, 2 player 1 winner, 3 final draw. */
     i8 winner;
+
+    /* Cached experiment scorer units for open, claimable local boards. */
+    u8 experiment_units[2][9];
 } Board2;
 
 static inline Board2 board2_initial(void)
 {
     return (Board2){.playable_subboards = M111111111,
-                    .winner = BOARD2_IN_PROGRESS};
+                    .winner = BOARD2_IN_PROGRESS,
+                    .experiment_units = {{51, 51, 51, 51, 51, 51, 51, 51, 51},
+                                         {51, 51, 51, 51, 51, 51, 51, 51, 51}}};
 }
 
 typedef struct Move_s {
@@ -188,8 +205,7 @@ _Static_assert(sizeof board2_line_masks == 16,
  * missing from one line, then missing & (missing - 1) is zero exactly when
  * that line has zero or one missing cell.  The compare keeps one-missing
  * lanes; zero-missing lanes contribute zero naturally.  Byte shifts fold the
- * eight u16 candidates into lane zero, and the final mask removes opponent
- * cells. */
+ * eight u16 candidates into lane zero, only allows open cells*/
 static inline mask9 winning_cells_simd(mask9 mine, mask9 opponent)
 {
     ASSERT_MASK9(mine);
@@ -499,8 +515,7 @@ static inline bool board2_play(Board2 *board, Move move)
         return true;
     }
 
-    // final check - op just played - can p still win this as yet unclaimed sub-board?
-
+    // final check - player just played - can op still win this as yet unclaimed sub-board?
     bool claimability_already_lost = (board->cannot_claim[op] & subboard_bit) != 0;
 
     if (!claimability_already_lost && !still_win(board->marks[player][move.subboard])) {

@@ -18,7 +18,7 @@
  * behaviour-changing command-line options: a build has one clear identity.
  * HELLO_TEXT is the small, human-readable version reported by `--HELLO`.
  */
-#define HELLO_TEXT "NM-003-R1" /* N = negamax, 003 = experiment counter, R = ratio score. */
+#define HELLO_TEXT "NM-004-R1" /* N = negamax, 004 = experiment counter, R = ratio score. */
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -33,10 +33,6 @@
  * cell (0, 2, 6, 8).  "MM" is therefore the centre cell of the centre board.
  * D and C draw a fresh random cell from their class on every call. */
 #define START_RULE "MM"
-
-#define LEVER_USCALE 5
-#define LEVER_COUNT_SCALE 1.0
-#define LEVER_MASTER_THREAT 80
 
 #define MAX_TIME 0.0900
 #define TERMINAL_SCORE 60000
@@ -84,6 +80,7 @@
 #include <search.h>
 
 #include "../engine/board2.h"
+#include "experiment.h"
 #include "../engine/support.h"
 
 
@@ -335,14 +332,7 @@ typedef struct Score_s {
     u16 p1;
 } Score;
 
-/* Mutable only so the in-process regression fixtures can cover alternatives;
-   production has no command-line path that changes these lever defaults. */
-static double count_scale = LEVER_COUNT_SCALE;
-static int uscale = LEVER_USCALE;
 #include "local_rig.h"
-#define COUNT_UNIT 20
-
-static const u16 scoring_lines[8] = {7,56,448,73,146,292,273,84};
 
 /* Converts a two-player score to p0/p1's bounded relative advantage. */
 static int scoreForPlayer(Score score, int player) {
@@ -354,102 +344,8 @@ static int scoreForPlayer(Score score, int player) {
         return player == 1 ? TERMINAL_SCORE : -TERMINAL_SCORE;
     int mine = player == 0 ? score.p0 : score.p1;
     int theirs = player == 0 ? score.p1 : score.p0;
-    return RELATIVE_SCORE_SCALE * (mine - theirs) / (mine + theirs + 2);
+    return RELATIVE_SCORE_SCALE * (mine - theirs) / (mine + theirs + 2000);
 }
-
-
-static int grid_potential(mask9 mine, mask9 blocked)
-{
-    mask9 winning = winning_cells_simd(mine, blocked);
-    int win_count = __builtin_popcount((unsigned)winning);
-
-    int winning_score =
-        win_count == 0 ? 0 :
-        win_count == 1 ? 4 : 6;
-
-    return winning_score
-         + live_one_mark_lines_simd(mine, blocked);
-}
-
-// Based on the overall U board - how many sub-boards does "player" own?
-static inline u8 player_u_win_count(const Board2 *board, u8 player)
-{
-    mask9 owned = board->umarks[player]
-                & (mask9)~board->umarks[player ^ 1u];
-
-    return (u8)__builtin_popcount((unsigned)owned);
-}
-
-// Assessment as to how relevant a U board cell is
-// replaced the f2 function in the original code
-// TODO: simd
-// TODO: check if the + 1 is needed
-// TODO: do we need the "closed" check - how abaout not calling it on closed cells!!!
-// returns 1 + MAX(line score going through this cell)
-// line score :
-// 0 if the line is blocked by opponent or drawn cell
-// 1 if the line is empty, 2 if palyer has 1 mark, 4 if the player has 2 marks
-static int u_cell_relevance(const Board2 *board, u8 cell, u8 player)
-{
-    ASSERT(board != NULL);
-    ASSERT(cell < 9);
-    ASSERT(player < 2);
-
-    onehot9 cell_bit = (onehot9)(1u << cell);
-    mask9 closed = board->umarks[0]
-                 | board->umarks[1];
-
-    if (closed & cell_bit)
-        return 0;
-
-    mask9 owned = board2_owned(board, player);
-    mask9 blocked = board->umarks[player ^ 1u];
-
-    int best_line_score = 0;
-
-    for (u8 i = 0; i < board2_cell_lines[cell].count; ++i) {
-        mask9 line = board2_cell_lines[cell].lines[i];
-
-        if (line & blocked)
-            continue;
-
-        int owned_count =
-            __builtin_popcount((unsigned)(line & owned));
-
-        int line_score = 1 << owned_count;
-
-        if (line_score > best_line_score)
-            best_line_score = line_score;
-    }
-
-    return 1 + best_line_score;
-}
-
-static u8 live_u_winning_cell_count(const Board2 *board, u8 player)
-{
-    ASSERT(board != NULL);
-    ASSERT(player < 2);
-
-    mask9 owned = board2_owned(board, player);
-
-    /*
-     * The opponent's U-status plane blocks both opponent-owned and drawn
-     * cells. Player-owned cells are already present in owned.
-     */
-    mask9 blocked = board->umarks[opponent(player)];
-
-    mask9 winning_cells = winning_cells_simd(owned, blocked);
-
-    /*
-     * A U-winning cell is only live if the player still has an unblocked
-     * winning line in that cell's local board.
-     */
-    winning_cells &= (mask9)~board->cannot_claim[player];
-
-    return (u8)__builtin_popcount((unsigned)winning_cells);
-}
-
-
 
 /* Score a nonterminal position without searching beyond this leaf. */
 static Score score_board(const Board2 *board)
@@ -459,63 +355,11 @@ static Score score_board(const Board2 *board)
 
     evaluation_calls++;
 
-    mask9 closed = board->umarks[0]
-                 | board->umarks[1];
-
-    int strength[2];
-
-    for (u8 player = 0; player < 2; ++player) {
-        u8 other = opponent(player);
-
-        mask9 u_owned = board2_owned(board, player);
-
-        /*
-         * The other status plane contains opponent-owned cells and draws,
-         * both of which block this player's U lines.
-         */
-        mask9 u_blocked = board->umarks[other];
-
-        int main_strength =
-            grid_potential(u_owned, u_blocked);
-
-        strength[player] = main_strength * uscale;
-
-        strength[player] +=
-            (int)(
-                player_u_win_count(board, player)
-                * COUNT_UNIT
-                * count_scale
-                + 0.5
-            );
-
-        strength[player] +=
-            LEVER_MASTER_THREAT
-            * live_u_winning_cell_count(board, player);
-
-        for (u8 cell = 0; cell < 9; ++cell) {
-            onehot9 cell_bit = (onehot9)(1u << cell);
-
-            if (closed & cell_bit)
-                continue;
-
-            int local_strength = grid_potential(
-                board->marks[player][cell],
-                board->marks[other][cell]
-            );
-
-            int relevance =
-                u_cell_relevance(board, cell, player);
-
-            strength[player] += local_strength * relevance;
-        }
-
-        if (strength[player] > 10000)
-            strength[player] = 10000;
-    }
+    ExperBoardScore channels = score_board_exper(board);
 
     return (Score){
-        (u16)strength[0],
-        (u16)strength[1]
+        (u16)((channels.three_iar[0] + channels.count[0]) * 1000.0 + 0.5),
+        (u16)((channels.three_iar[1] + channels.count[1]) * 1000.0 + 0.5)
     };
 }
 
@@ -539,6 +383,7 @@ static bool has_certified_immediate_win(const Board2 *board)
             continue;
 
         Board2 after = *board;
+        /* This probe only checks the winner/certificate, so no score cache is needed. */
         board2_play(&after, move);
 
         if (after.winner == (Board2Winner)(player + 1u))
@@ -631,7 +476,7 @@ static SearchResult negamax(const Board2 *board, SearchConfig config) {
 
     for (Move move; next_move(&moves, &move);) {
         Board2 child = *board;
-        bool proof_changed = board2_play(&child, move);
+        bool proof_changed = board2_play_exper(&child, move);
         SearchResult child_result = negamax(
             &child,
             (SearchConfig){.ply = config.ply + 1,
@@ -734,7 +579,7 @@ Move evaluateMovesShallowTimed(Board2 *board, ValidMoves valid_moves) {
             }
 
             Board2 child = *board;
-            board2_play(&child, root->move);
+            board2_play_exper(&child, root->move);
             SearchResult result = negamax(
                 &child,
                 (SearchConfig){.ply=1, .stop_at_ply=target_plies, .timed=true,
@@ -957,7 +802,7 @@ Move getStartMove(void) {
 Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
 {
     if (last_move.subboard != 0xFF)
-        board2_play(board, last_move);
+        board2_play_exper(board, last_move);
 
     evaluation_calls = 0;
     edata.peek_probes = 0;
@@ -969,7 +814,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
         Move forced = xy2move((u8)localRigForcedX(), (u8)localRigForcedY());
         if (!isLegalMove(forced, valid_moves))
             error("Local rig forced an illegal move\n");
-        board2_play(board, forced);
+        board2_play_exper(board, forced);
         return forced;
     }
 
@@ -977,7 +822,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
        START_RULE opening directly instead of searching. */
     if (last_move.subboard == 0xFF) {
         Move move = getStartMove();
-        board2_play(board, move);
+        board2_play_exper(board, move);
         return move;
     }
 
@@ -995,7 +840,7 @@ Move getMove(Board2 *board, Move last_move, ValidMoves *valid_moves)
         error("Selected illegal move\n");
     }
 
-    board2_play(board, my_move);
+    board2_play_exper(board, my_move);
     return my_move;
 }
 

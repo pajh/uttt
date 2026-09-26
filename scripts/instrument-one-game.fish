@@ -54,6 +54,13 @@ or begin
 end
 
 set -l diagnostic_cflags '-Wall -Wextra -g3 -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer'
+# The instrumented bot is only intended to finish inside the rig's relaxed
+# 5000ms local guard, which is not the 100ms arena target.  The debug build
+# (D=1 sanitisers at -O0) exceeded even the local guard and forfeited in the
+# observed game, so only L=1 is forced on top of the optimized E=1
+# fixed-evaluation build used by the tuning batches; the fixed evaluation cap
+# is preserved.
+set -l bot1_build D=0 L=1 A=0 E=1 MAX_SCORE=450000
 set -l bot1_command "./bin/$bot1"
 set -l bot2_command "./bin/$bot2"
 if test -n "$bot1_params"
@@ -64,6 +71,7 @@ if test -n "$bot2_params"
 end
 
 set -l game_json "$work_dir/game.json"
+set -l bot1_build_text (string join ' ' $bot1_build)
 
 printf '%s\n' \
     "bot1 target/name: $bot1" \
@@ -73,8 +81,8 @@ printf '%s\n' \
     "bot2 literal parameters: $bot2_params" \
     "bot2 command (p1): $bot2_command" \
     "starting player: p0" \
-    "instrumented bot build: L=1 E=1 MAX_SCORE=100000" \
-    "diagnostic CFLAGS: $diagnostic_cflags" \
+    "instrumented bot build: $bot1_build_text (optimized)" \
+    "gamerig diagnostic CFLAGS: $diagnostic_cflags" \
     "gamerig executable: ./bin/gamerig" \
     "logical gamerig options:" \
     "  ./bin/$bot1 \"$bot1_params\"" \
@@ -98,7 +106,7 @@ if test $status -ne 0
     exit $build_status
 end
 
-make -B D=1 L=1 A=1 E=1 MAX_SCORE=520000 "bin/$bot1" > "$work_dir/build-bot1.log" 2>&1
+make -B $bot1_build "bin/$bot1" > "$work_dir/build-bot1.log" 2>&1
 if test $status -ne 0
     set -l build_status $status
     echo "bot1 build failed" >&2
@@ -178,11 +186,41 @@ or begin
     exit $setup_status
 end
 
-echo 'Instrument game: PASS'
-echo "Instrument work: $work_dir"
-echo "Instrument report: $output/report.html"
-
 # Publish a CSV view of the binary experiment log, if one was configured.
 if set -q NEGAMAX_RESULTS; and test -n "$NEGAMAX_RESULTS"
     python3 scripts/edata-csv.py "$NEGAMAX_RESULTS" "$NEGAMAX_RESULTS.csv"
 end
+
+# gamerig exits 0 for a completed forfeit, so process status alone does not
+# prove a completed game: read the result type before reporting PASS.
+set -l result_line (python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["result"]; print(r["result type"], r["winner"])' "$game_json")
+if test $status -ne 0
+    set -l parse_status $status
+    echo "Could not read the game result from $game_json" >&2
+    echo "Instrument work: $work_dir" >&2
+    exit $parse_status
+end
+set -l result_parts (string split ' ' -- "$result_line")
+set -l result_type $result_parts[1]
+set -l winner $result_parts[2]
+
+if test "$result_type" = 'Forfeit'
+    # gamerig records the forfeiter's opponent as the winner, so the forfeiting
+    # player is 1 - winner; the log line names it directly as well.
+    set -l forfeiter unknown
+    if string match -qr '^[01]$' -- "$winner"
+        set forfeiter (math 1 - $winner)
+    end
+    echo '=== INSTRUMENT GAME TECHNICAL FAILURE: FORFEIT ===' >&2
+    echo "gamerig reported a Forfeit: p$forfeiter forfeited (winner p$winner)." >&2
+    grep -m 1 -i 'forfeit' "$work_dir/game.log" >&2
+    echo '=== END FORFEIT OUTPUT ===' >&2
+    echo 'Instrument game: FAIL (technical forfeit)' >&2
+    echo "Instrument work: $work_dir" >&2
+    echo "Instrument report: $output/report.html" >&2
+    exit 1
+end
+
+echo 'Instrument game: PASS'
+echo "Instrument work: $work_dir"
+echo "Instrument report: $output/report.html"

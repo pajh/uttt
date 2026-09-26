@@ -69,6 +69,15 @@ existing file of that name is rotated to `reports/multi-latest.N.log` first.
 Raw per-line JSON and bot logs stay in `work/multi/latest/` (a prior run is
 archived as `work/multi/latest.N/`).
 
+Ctrl-C during the games stops new games only.  Every `gamerig` game runs in its
+own process session, so the terminal signal never reaches the games in flight;
+they finish, keep their JSONL records, and are counted in the result table.  The
+table then gains an `INTERRUPTED:` line with the completed/target game count and
+the raw directory, is written and rotated to `reports/multi-latest.log` as
+usual, and the run exits 130.  Further Ctrl-C presses during the drain are
+absorbed, so the report is always written; wait for the slowest game in flight
+to end.
+
 The older `multi-rig.fish`, `summarize-rig.py`, `interpret_multi_csv.py`,
 `interpret_multi_csv.fish`, `resummarize.fish` and the GitHub dispatch/retrieve
 helpers have been removed; they drove the retired multi-game rig.
@@ -81,8 +90,19 @@ Raw per-game JSON and logs go to `work/tune-negamax/latest/`.
 
 `fish scripts/instrument-one-game.fish bot1 "bot1 params" bot2 "bot2 params"`
 runs one instrumented game through the single-game `gamerig` and publishes
-`reports/instrument/report.html`.  It builds `bot1` with `L=1`, runs
+`reports/instrument/report.html`.  It builds `bot1` with
+`D=0 L=1 A=0 E=1 MAX_SCORE=450000` — optimized, because a debug build
+(sanitisers, `-O0`) exceeds even the rig's relaxed 5000ms local guard and
+forfeits.  That guard is a rig convenience, not the arena limit: a move may
+take most of a second and still complete here, while the real arena allows
+1000ms for the first response and 100ms for later ones, which this build does
+not meet.  It runs
 `gamerig --instrument 0`, and keeps the raw JSON in `work/instrument/latest/`.
+A `Forfeit` is a technical failure, not a result: `gamerig` still exits 0, so
+the script renders and publishes the report, keeps the raw files, prints the
+forfeiting player and the rig Forfeit line, and exits 1 without printing
+`PASS`; the report then shows a red banner under the heading.  A completed
+non-forfeit game prints `PASS`.
 The report shows one 9×9 board per instrumented move: the position before the
 move, the opponent's last move (purple `LAST`), every evaluated candidate's root
 score, our choice (yellow), and closed small boards badged X WON/O WON/DRAW.

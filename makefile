@@ -6,7 +6,7 @@ CFLAGS += -DBOARD_ASSERTS=1
 endif
 LOCAL_ARCH ?= -march=native
 # Use 550000 evaluations unless the caller supplies MAX_SCORE explicitly.
-MAX_SCORE ?= 480000
+MAX_SCORE ?= 450000
 # ai_negamax build options, each 0 or 1.  They affect only ai_negamax; orig and
 # ai_random always build optimised and ignore them.
 #   D=1 debug (sanitisers, -O0); D=0 optimised (-O3)

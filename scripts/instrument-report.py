@@ -118,11 +118,24 @@ winner = result["winner"]
 winner_text = "draw" if winner is None else f"p{winner}"
 identity = header.get(f"p{player} HELLO", "")
 
+# A Forfeit is a technical failure, not a game result, so banner it directly
+# under the heading.  The rig records the forfeiter's opponent as the winner.
+fail_banner = ""
+if result["result type"] == "Forfeit":
+    forfeiter = f"p{1 - winner}" if winner in (0, 1) else "an unidentified player"
+    fail_banner = (
+        '<div class="fail-banner"><strong>TECHNICAL FAILURE &mdash; FORFEIT</strong>'
+        f'{forfeiter} forfeited; this is not a completed game result. '
+        'See game.log for the rig Forfeit line.</div>')
+
 document = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Ultimate Tic-Tac-Toe instrument report</title>
 <style>
 body {{ font: 14px system-ui, sans-serif; margin: 24px; color: #17202a; }}
 h1,h2 {{ margin-bottom: .4rem; }} .note {{ color:#566573; }}
+.fail-banner {{ margin:12px 0; padding:12px 14px; border:3px solid #b91c1c;
+  border-radius:10px; background:#fee2e2; color:#7f1d1d; font-size:15px; line-height:1.4; }}
+.fail-banner strong {{ display:block; font-size:17px; letter-spacing:.05em; }}
 .boards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(470px,1fr)); gap:18px; margin:18px 0 30px; }}
 .board-card {{ border:1px solid #cbd5e1; border-radius:10px; padding:14px; background:#f8fafc; }}
 .board-card h3 {{ margin:0; }} .board-card p {{ margin:7px 0 12px; color:#475569; }}
@@ -155,6 +168,7 @@ table.summary th,table.summary td {{ border:1px solid #ccd1d1; padding:5px 10px;
 table.summary th {{ background:#eaf2f8; }}
 </style></head><body>
 <h1>Ultimate Tic-Tac-Toe: one-game instrument report</h1>
+{fail_banner}
 <p class="note">X is the instrumented bot (p{player}); O is the opponent. The purple ring and
 LAST label mark the opponent's immediately preceding move; yellow marks our choice.
 Strong blue/red/grey borders and X WON/O WON/DRAW badges mark closed small boards.

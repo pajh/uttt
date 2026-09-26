@@ -1,0 +1,913 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ultimate board</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, sans-serif;
+      background: #f2f4f7;
+      color: #172033;
+    }
+
+    body {
+      margin: 0;
+      padding: 2rem;
+    }
+
+    h1 {
+      margin: 0 0 1.5rem;
+    }
+
+    .workspace {
+      display: flex;
+      align-items: flex-start;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .ultimate-board {
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+      width: min(90vw, 540px);
+      height: min(90vw, 540px);
+      gap: 0.5rem;
+      padding: 0.5rem;
+      background: #20283a;
+      overflow: hidden;
+    }
+
+    .subboard {
+      position: relative;
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+      min-width: 0;
+      min-height: 0;
+      aspect-ratio: 1;
+      gap: 1px;
+      padding: 1px;
+      background: #20283a;
+      overflow: hidden;
+    }
+
+    .subboard.won {
+      box-shadow: inset 0 0 0 3px #f59e0b;
+    }
+
+    .subboard.won::after {
+      content: attr(data-winner) " won";
+      position: absolute;
+      z-index: 1;
+      top: 0.25rem;
+      right: 0.25rem;
+      padding: 0.15rem 0.3rem;
+      background: #fef3c7;
+      color: #92400e;
+      font-size: 0.65rem;
+      font-weight: 700;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    .cell,
+    .state-cell {
+      min-width: 0;
+      min-height: 0;
+      border: 0;
+      font: inherit;
+      font-size: clamp(1rem, 5vw, 2.5rem);
+      font-weight: 700;
+    }
+
+    .cell {
+      cursor: pointer;
+      background: #f8fafc;
+    }
+
+    .cell:hover:not(:disabled) {
+      background: #e2e8f0;
+    }
+
+    .cell:disabled {
+      cursor: default;
+    }
+
+    .cell.x {
+      color: #2563eb;
+      background: #dbeafe;
+    }
+
+    .cell.o {
+      color: #dc2626;
+      background: #fee2e2;
+    }
+
+    .cell.winning {
+      box-shadow: inset 0 0 0 3px #f59e0b;
+    }
+
+    .cell.available {
+      box-shadow: inset 0 0 0 2px #22c55e;
+    }
+
+    .cell.candidate-score {
+      position: relative;
+      font-size: clamp(0.65rem, 2.25vw, 1.1rem);
+    }
+
+    .candidate-markers {
+      position: absolute;
+      top: 0.2rem;
+      right: 0.25rem;
+      z-index: 1;
+      color: #166534;
+      font-size: 0.8rem;
+      line-height: 1;
+      pointer-events: none;
+    }
+
+    .controls,
+    .ultimate-state {
+      padding: 1rem;
+      background: white;
+      border: 1px solid #cbd5e1;
+    }
+
+    .controls fieldset {
+      margin: 0;
+      padding: 0.5rem 0.75rem 0.75rem;
+    }
+
+    .controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      margin-right: 0.75rem;
+    }
+
+    .ultimate-state {
+      margin-top: 1.5rem;
+    }
+
+    .state-board {
+      display: grid;
+      grid-template-columns: repeat(3, 2rem);
+      grid-template-rows: repeat(3, 2rem);
+      gap: 1px;
+      width: max-content;
+      padding: 1px;
+      background: #94a3b8;
+    }
+
+    .state-cell {
+      display: grid;
+      place-items: center;
+      background: #f8fafc;
+      font-size: 0.8rem;
+    }
+
+    .state-cell.x {
+      color: #2563eb;
+      background: #dbeafe;
+    }
+
+    .state-cell.o {
+      color: #dc2626;
+      background: #fee2e2;
+    }
+
+    .state-cell.winning {
+      box-shadow: inset 0 0 0 3px #f59e0b;
+    }
+
+    .state-cell.drawn {
+      color: #64748b;
+      background: #e2e8f0;
+    }
+
+    .game-status {
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <h1>Ultimate board</h1>
+
+  <div class="workspace">
+    <section id="board" class="ultimate-board" aria-label="Ultimate board"></section>
+
+    <aside class="controls">
+      <fieldset>
+        <legend>Mode</legend>
+        <label>
+          <input type="radio" name="mode" value="edit" checked>
+          Edit
+        </label>
+        <label>
+          <input type="radio" name="mode" value="play">
+          Play
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Mark to place</legend>
+        <label>
+          <input type="radio" name="mark" value="X" checked>
+          X
+        </label>
+        <label>
+          <input type="radio" name="mark" value="O">
+          O
+        </label>
+      </fieldset>
+      <p>Selected: <strong id="selected-mark">X</strong></p>
+      <p>Next: <strong id="next-mark">X</strong></p>
+      <p>Score: X <strong id="score-x">0</strong>, O <strong id="score-o">0</strong></p>
+      <p>X perspective: <strong id="score-ratio">0</strong></p>
+      <p>Green-cell score: player to move; <strong>*</strong> best ratio, <strong>+</strong> best raw difference</p>
+      <p id="game-status" class="game-status" aria-live="polite">Game in progress</p>
+    </aside>
+  </div>
+
+  <section class="ultimate-state">
+    <h2>Ultimate board state</h2>
+    <p>This is <code>boards[9]</code>, the tenth board. A cell shows the player who won that subboard, or <strong>D</strong> for a draw.</p>
+    <div id="state-board" class="state-board" aria-label="Ultimate board state"></div>
+  </section>
+
+  <script>
+    "use strict";
+
+    // Every board, including each subboard, uses this 3x3 index layout:
+    //
+    // 0 1 2
+    // 3 4 5
+    // 6 7 8
+    const CELL_LAYOUT = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8]
+    ];
+
+    const WINNING_LINES = [
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8],
+      [0, 3, 6],
+      [1, 4, 7],
+      [2, 5, 8],
+      [0, 4, 8],
+      [2, 4, 6]
+    ];
+
+    const FULL_MASK = 0x1ff;
+    const LINE_MASKS = [
+      0x007, 0x038, 0x1c0,
+      0x049, 0x092, 0x124,
+      0x111, 0x054
+    ];
+    const CELL_LINES = [
+      [0x007, 0x049, 0x111],
+      [0x007, 0x092],
+      [0x007, 0x124, 0x054],
+      [0x038, 0x049],
+      [0x038, 0x092, 0x111, 0x054],
+      [0x038, 0x124],
+      [0x1c0, 0x049, 0x054],
+      [0x1c0, 0x092],
+      [0x1c0, 0x124, 0x111]
+    ];
+
+    const EVAL_USCALE = 5;
+    const EVAL_COUNT_UNIT = 20;
+    const EVAL_COUNT_SCALE = 1.0;
+    const EVAL_MASTER_THREAT = 80;
+    const EVAL_MAX_SCORE = 10000;
+    const TERMINAL_SCORE = 60000;
+    const RELATIVE_SCORE_SCALE = 10000;
+
+    function popcount9(mask) {
+      let count = 0;
+      while (mask !== 0) {
+        mask &= mask - 1;
+        count += 1;
+      }
+      return count;
+    }
+
+    function hasThreeInARow(mask) {
+      for (const line of LINE_MASKS) {
+        if ((mask & line) === line) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function winningCells(mine, blocked) {
+      let result = 0;
+      for (const line of LINE_MASKS) {
+        const missing = line & ~mine;
+        if ((missing & (missing - 1)) === 0) {
+          result |= missing;
+        }
+      }
+      return result & FULL_MASK & ~blocked;
+    }
+
+    function liveOneMarkLines(mine, blocked) {
+      let count = 0;
+      for (const line of LINE_MASKS) {
+        const mineInLine = mine & line;
+        if (
+          mineInLine !== 0 &&
+          (mineInLine & (mineInLine - 1)) === 0 &&
+          (blocked & line) === 0
+        ) {
+          count += 1;
+        }
+      }
+      return count;
+    }
+
+    function gridPotential(mine, blocked) {
+      const winningCount = popcount9(winningCells(mine, blocked));
+      const winningScore = winningCount === 0 ? 0 : winningCount === 1 ? 4 : 6;
+      return winningScore + liveOneMarkLines(mine, blocked);
+    }
+
+    function uCellRelevance(status, closed, cell, player) {
+      if ((closed & (1 << cell)) !== 0) {
+        return 0;
+      }
+
+      const playerIndex = player === "O" ? 1 : 0;
+      const otherIndex = playerIndex ^ 1;
+      const owned = status[playerIndex] & ~status[otherIndex];
+      const blocked = status[otherIndex];
+      let bestLineScore = 0;
+
+      for (const line of CELL_LINES[cell]) {
+        if ((line & blocked) !== 0) {
+          continue;
+        }
+
+        const ownedCount = popcount9(line & owned);
+        const lineScore = 1 << ownedCount;
+        if (lineScore > bestLineScore) {
+          bestLineScore = lineScore;
+        }
+      }
+
+      return 1 + bestLineScore;
+    }
+
+    const state = {
+      mode: "edit",
+      activeMark: "X",
+      nextMark: "X",
+      lastMove: null,
+      gameOver: false,
+      gameWinner: "",
+      finalCounts: null,
+      drawnBoards: Array(9).fill(false),
+      boards: Array.from({ length: 10 }, (_, id) => ({
+        id,
+        cells: Array(9).fill(""),
+        won: false,
+        winner: "",
+        winningLine: null
+      })),
+      findWinningLine(board, player) {
+        const cells = this.boards[board].cells;
+        return WINNING_LINES.find((line) =>
+          line.every((cell) => cells[cell] === player)
+        ) || null;
+      },
+      checkFinalResult() {
+        if (this.gameOver) {
+          return;
+        }
+
+        const counts = { X: 0, O: 0 };
+        let allClosed = true;
+
+        for (let board = 0; board < 9; board++) {
+          const subboard = this.boards[board];
+          if (!subboard.won && !this.drawnBoards[board]) {
+            allClosed = false;
+          }
+          if (subboard.won) {
+            counts[subboard.winner] += 1;
+          }
+        }
+
+        if (!allClosed) {
+          return;
+        }
+
+        this.gameOver = true;
+        this.finalCounts = counts;
+        this.gameWinner =
+          counts.X > counts.O ? "X" : counts.O > counts.X ? "O" : "draw";
+      },
+      uStatus() {
+        const status = [0, 0];
+        for (let board = 0; board < 9; board++) {
+          const bit = 1 << board;
+          const mark = this.boards[9].cells[board];
+          if (mark === "X") {
+            status[0] |= bit;
+          } else if (mark === "O") {
+            status[1] |= bit;
+          }
+          if (this.drawnBoards[board]) {
+            status[0] |= bit;
+            status[1] |= bit;
+          }
+        }
+        return status;
+      },
+      localMask(board, player) {
+        let mask = 0;
+        for (let cell = 0; cell < 9; cell++) {
+          if (this.boards[board].cells[cell] === player) {
+            mask |= 1 << cell;
+          }
+        }
+        return mask;
+      },
+      cannotClaim(board, player) {
+        if (this.boards[board].won || this.drawnBoards[board]) {
+          return true;
+        }
+
+        const opponent = player === "X" ? "O" : "X";
+        const mine = this.localMask(board, player);
+        const theirs = this.localMask(board, opponent);
+        const empty = FULL_MASK & ~(mine | theirs);
+        return !hasThreeInARow(mine | empty);
+      },
+      liveUWiningCellCount(owned, blocked, player) {
+        const candidates = winningCells(owned, blocked);
+        let count = 0;
+
+        for (let board = 0; board < 9; board++) {
+          if (
+            (candidates & (1 << board)) !== 0 &&
+            !this.cannotClaim(board, player)
+          ) {
+            count += 1;
+          }
+        }
+        return count;
+      },
+      clone() {
+        const copy = Object.assign(Object.create(Object.getPrototypeOf(this)), this);
+        copy.boards = this.boards.map((board) => ({
+          ...board,
+          cells: [...board.cells],
+          winningLine: board.winningLine === null
+            ? null
+            : [...board.winningLine]
+        }));
+        copy.drawnBoards = [...this.drawnBoards];
+        copy.lastMove = this.lastMove === null ? null : { ...this.lastMove };
+        copy.finalCounts = this.finalCounts === null
+          ? null
+          : { ...this.finalCounts };
+        copy.ultimateBoard = copy.boards[9];
+        return copy;
+      },
+      evaluationScore() {
+        if (!this.gameOver) {
+          return this.scoreBoard();
+        }
+        if (this.gameWinner === "draw") {
+          return { X: TERMINAL_SCORE, O: TERMINAL_SCORE };
+        }
+        if (this.gameWinner === "X") {
+          return { X: TERMINAL_SCORE, O: 0 };
+        }
+        if (this.gameWinner === "O") {
+          return { X: 0, O: TERMINAL_SCORE };
+        }
+        return null;
+      },
+      evaluateCandidate(board, cell, player) {
+        const candidate = this.clone();
+        if (!candidate.set(board, cell, player)) {
+          return null;
+        }
+        const score = candidate.evaluationScore();
+        if (score === null) {
+          return null;
+        }
+
+        const myScore = player === "X" ? score.X : score.O;
+        const theirScore = player === "X" ? score.O : score.X;
+        return {
+          myScore,
+          theirScore,
+          ratio: candidate.scoreForPlayer(score, player),
+          negamaxScore: myScore - theirScore
+        };
+      },
+      scoreBoard() {
+        // The C evaluator is defined only for an in-progress position.
+        if (this.gameOver) {
+          return null;
+        }
+
+        const status = this.uStatus();
+        const closed = status[0] | status[1];
+        const strength = [0, 0];
+
+        for (let playerIndex = 0; playerIndex < 2; playerIndex++) {
+          const player = playerIndex === 0 ? "X" : "O";
+          const other = playerIndex === 0 ? "O" : "X";
+          const otherIndex = playerIndex ^ 1;
+          const owned = status[playerIndex] & ~status[otherIndex];
+          const blocked = status[otherIndex];
+
+          let value = gridPotential(owned, blocked) * EVAL_USCALE;
+          value += Math.floor(
+            popcount9(owned) * EVAL_COUNT_UNIT * EVAL_COUNT_SCALE + 0.5
+          );
+          value +=
+            EVAL_MASTER_THREAT *
+            this.liveUWiningCellCount(owned, blocked, player);
+
+          for (let board = 0; board < 9; board++) {
+            if ((closed & (1 << board)) !== 0) {
+              continue;
+            }
+
+            const localStrength = gridPotential(
+              this.localMask(board, player),
+              this.localMask(board, other)
+            );
+            value +=
+              localStrength *
+              uCellRelevance(status, closed, board, player);
+          }
+
+          strength[playerIndex] = Math.min(value, EVAL_MAX_SCORE);
+        }
+
+        return { X: strength[0], O: strength[1] };
+      },
+      scoreForPlayer(score, player) {
+        if (score.X === TERMINAL_SCORE && score.O === TERMINAL_SCORE) {
+          return 0;
+        }
+        if (score.X === TERMINAL_SCORE && score.O === 0) {
+          return player === "X" ? TERMINAL_SCORE : -TERMINAL_SCORE;
+        }
+        if (score.O === TERMINAL_SCORE && score.X === 0) {
+          return player === "O" ? TERMINAL_SCORE : -TERMINAL_SCORE;
+        }
+
+        const mine = player === "O" ? score.O : score.X;
+        const theirs = player === "O" ? score.X : score.O;
+        return Math.trunc(
+          RELATIVE_SCORE_SCALE * (mine - theirs) / (mine + theirs + 2)
+        );
+      },
+      isValidPlayMove(board, cell) {
+        const subboard = this.boards[board];
+        if (
+          this.gameOver ||
+          !subboard ||
+          board === 9 ||
+          this.drawnBoards[board] ||
+          subboard.won ||
+          subboard.cells[cell] !== ""
+        ) {
+          return false;
+        }
+
+        if (this.lastMove === null) {
+          return true;
+        }
+
+        // The cell index of the last move selects the next subboard.
+        const targetBoardIndex = this.lastMove.cell;
+        const targetSubboard = this.boards[targetBoardIndex];
+        return (
+          targetSubboard.won ||
+          this.drawnBoards[targetBoardIndex] ||
+          board === targetBoardIndex
+        );
+      },
+      set(board, cell, player) {
+        const subboard = this.boards[board];
+        if (
+          this.gameOver ||
+          !subboard ||
+          board === 9 ||
+          this.drawnBoards[board] ||
+          subboard.won ||
+          subboard.cells[cell] !== "" ||
+          (player !== "X" && player !== "O") ||
+          (this.mode === "play" && !this.isValidPlayMove(board, cell))
+        ) {
+          return false;
+        }
+
+        subboard.cells[cell] = player;
+        const winningLine = this.findWinningLine(board, player);
+
+        if (winningLine) {
+          subboard.won = true;
+          subboard.winner = player;
+          subboard.winningLine = winningLine;
+          this.boards[9].cells[board] = player;
+
+          const ultimateWinningLine = this.findWinningLine(9, player);
+          if (ultimateWinningLine) {
+            this.boards[9].won = true;
+            this.boards[9].winner = player;
+            this.boards[9].winningLine = ultimateWinningLine;
+            this.gameOver = true;
+            this.gameWinner = player;
+          }
+        }
+
+        if (!winningLine && subboard.cells.every((mark) => mark !== "")) {
+          this.drawnBoards[board] = true;
+        }
+
+        this.checkFinalResult();
+
+        if (this.mode === "play") {
+          this.lastMove = { board, cell, player };
+        }
+
+        return true;
+      }
+    };
+
+    // boards[0] through boards[8] are the nine subboards.
+    // boards[9] is reserved for the state of the overall Ultimate board.
+    state.ultimateBoard = state.boards[9];
+
+    const boardElement = document.getElementById("board");
+    const stateBoardElement = document.getElementById("state-board");
+    const selectedMarkElement = document.getElementById("selected-mark");
+    const nextMarkElement = document.getElementById("next-mark");
+    const scoreXElement = document.getElementById("score-x");
+    const scoreOElement = document.getElementById("score-o");
+    const scoreRatioElement = document.getElementById("score-ratio");
+    const gameStatusElement = document.getElementById("game-status");
+
+    function makeCell(mark, label, disabled = false, winning = false) {
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "cell";
+      cell.textContent = mark;
+      cell.setAttribute("aria-label", label);
+      cell.disabled = disabled;
+      if (mark === "X") {
+        cell.classList.add("x");
+      } else if (mark === "O") {
+        cell.classList.add("o");
+      }
+      if (winning) {
+        cell.classList.add("winning");
+      }
+      return cell;
+    }
+
+    function renderBoard() {
+      boardElement.replaceChildren();
+      const candidateScores = [];
+      let bestRatio = null;
+      let bestNegamaxScore = null;
+
+      for (let subboardIndex = 0; subboardIndex < 9; subboardIndex++) {
+        const subboardState = state.boards[subboardIndex];
+        const subboard = document.createElement("div");
+        subboard.className = "subboard";
+        subboard.classList.toggle("won", subboardState.won);
+        subboard.dataset.board = String(subboardIndex);
+        subboard.dataset.winner = subboardState.winner;
+        subboard.setAttribute(
+          "aria-label",
+          subboardState.won
+            ? `Subboard ${subboardIndex}, won by ${subboardState.winner}`
+            : `Subboard ${subboardIndex}`
+        );
+
+        for (let row = 0; row < 3; row++) {
+          for (let column = 0; column < 3; column++) {
+            const cellIndex = CELL_LAYOUT[row][column];
+            const mark = subboardState.cells[cellIndex];
+            const winning =
+              subboardState.winningLine !== null &&
+              subboardState.winningLine.includes(cellIndex);
+            const validPlayMove =
+              state.mode === "play" &&
+              state.isValidPlayMove(subboardIndex, cellIndex);
+            const cellLabel =
+              `Subboard ${subboardIndex}, cell ${cellIndex}: ${mark || "empty"}` +
+              (subboardState.won ? `; won by ${subboardState.winner}` : "");
+            const cell = makeCell(
+              mark,
+              cellLabel,
+              mark !== "" ||
+                subboardState.won ||
+                state.gameOver ||
+                (state.mode === "play" && !validPlayMove),
+              winning
+            );
+            if (validPlayMove) {
+              const candidate = state.evaluateCandidate(
+                subboardIndex,
+                cellIndex,
+                state.nextMark
+              );
+              cell.classList.add("available");
+              cell.textContent = candidate === null ? "—" : String(candidate.ratio);
+              cell.classList.add("candidate-score");
+              if (candidate === null) {
+                cell.setAttribute(
+                  "aria-label",
+                  `${cellLabel}; candidate score unavailable`
+                );
+                cell.title = "Candidate score unavailable";
+              } else {
+                candidateScores.push({ cell, cellLabel, ...candidate });
+                if (bestRatio === null || candidate.ratio > bestRatio) {
+                  bestRatio = candidate.ratio;
+                }
+                if (
+                  bestNegamaxScore === null ||
+                  candidate.negamaxScore > bestNegamaxScore
+                ) {
+                  bestNegamaxScore = candidate.negamaxScore;
+                }
+              }
+            }
+
+            cell.dataset.board = String(subboardIndex);
+            cell.dataset.cell = String(cellIndex);
+            cell.addEventListener("click", () => {
+              const player = state.mode === "play" ? state.nextMark : state.activeMark;
+              if (!state.set(subboardIndex, cellIndex, player)) {
+                return;
+              }
+
+              if (state.mode === "play") {
+                state.nextMark = state.nextMark === "X" ? "O" : "X";
+              }
+
+              renderBoard();
+              renderUltimateState();
+              renderStatus();
+            });
+
+            subboard.append(cell);
+          }
+        }
+
+        boardElement.append(subboard);
+      }
+
+      for (const entry of candidateScores) {
+        const markers =
+          (entry.negamaxScore === bestNegamaxScore ? "+" : "") +
+          (entry.ratio === bestRatio ? "*" : "");
+        const label = `${entry.ratio}${markers}`;
+        entry.cell.textContent = String(entry.ratio);
+        if (markers !== "") {
+          const markerElement = document.createElement("span");
+          markerElement.className = "candidate-markers";
+          markerElement.textContent = markers;
+          entry.cell.append(markerElement);
+        }
+        entry.cell.dataset.ratio = String(entry.ratio);
+        entry.cell.dataset.myScore = String(entry.myScore);
+        entry.cell.dataset.theirScore = String(entry.theirScore);
+        entry.cell.dataset.negamax = String(entry.negamaxScore);
+        entry.cell.dataset.markers = markers || "none";
+        entry.cell.setAttribute(
+          "aria-label",
+          `${entry.cellLabel}; score ${label}; markers ${markers || "none"}; ` +
+            `raw ${entry.myScore} versus ${entry.theirScore}; ` +
+            `difference ${entry.negamaxScore}`
+        );
+        entry.cell.title =
+          `Score ${entry.ratio}${markers}; markers ${markers || "none"}; ` +
+          `raw ${entry.myScore} vs ${entry.theirScore}; ` +
+          `difference ${entry.negamaxScore}`;
+      }
+    }
+
+    function renderUltimateState() {
+      stateBoardElement.replaceChildren();
+
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 3; column++) {
+          const cellIndex = CELL_LAYOUT[row][column];
+          const mark = state.ultimateBoard.cells[cellIndex];
+          const drawn = state.drawnBoards[cellIndex];
+          const winning =
+            state.ultimateBoard.winningLine !== null &&
+            state.ultimateBoard.winningLine.includes(cellIndex);
+          const stateCell = document.createElement("div");
+          stateCell.className = "state-cell";
+          stateCell.textContent = drawn ? "D" : mark || "·";
+          if (drawn) {
+            stateCell.classList.add("drawn");
+          } else if (mark === "X") {
+            stateCell.classList.add("x");
+          } else if (mark === "O") {
+            stateCell.classList.add("o");
+          }
+          if (winning) {
+            stateCell.classList.add("winning");
+          }
+          stateCell.setAttribute(
+            "aria-label",
+            drawn
+              ? `Ultimate state cell ${cellIndex}: drawn`
+              : `Ultimate state cell ${cellIndex}: ${mark || "empty"}`
+          );
+          stateBoardElement.append(stateCell);
+        }
+      }
+    }
+
+    function renderStatus() {
+      selectedMarkElement.textContent = state.activeMark;
+      nextMarkElement.textContent = state.nextMark;
+
+      const score = state.evaluationScore();
+      if (score === null) {
+        scoreXElement.textContent = "—";
+        scoreOElement.textContent = "—";
+        scoreRatioElement.textContent = "—";
+      } else {
+        scoreXElement.textContent = String(score.X);
+        scoreOElement.textContent = String(score.O);
+        scoreRatioElement.textContent = String(
+          state.scoreForPlayer(score, "X")
+        );
+      }
+
+      if (!state.gameOver) {
+        gameStatusElement.textContent = "Game in progress";
+      } else if (state.gameWinner === "draw") {
+        gameStatusElement.textContent =
+          `Game over: draw (X ${state.finalCounts.X}, O ${state.finalCounts.O})`;
+      } else if (state.finalCounts) {
+        gameStatusElement.textContent =
+          `Game over: ${state.gameWinner} wins by count ` +
+          `(X ${state.finalCounts.X}, O ${state.finalCounts.O})`;
+      } else {
+        gameStatusElement.textContent = `Game over: ${state.gameWinner} wins!`;
+      }
+    }
+
+    function syncControlsFromState() {
+      document.querySelectorAll('input[name="mode"]').forEach((input) => {
+        input.checked = input.value === state.mode;
+      });
+      document.querySelectorAll('input[name="mark"]').forEach((input) => {
+        input.checked = input.value === state.activeMark;
+      });
+    }
+
+    document.querySelectorAll('input[name="mode"]').forEach((input) => {
+      input.addEventListener("change", (event) => {
+        state.mode = event.target.value;
+        state.lastMove = null;
+        if (state.mode === "play") {
+          state.nextMark = "X";
+        }
+        renderBoard();
+        renderStatus();
+      });
+    });
+
+    document.querySelectorAll('input[name="mark"]').forEach((input) => {
+      input.addEventListener("change", (event) => {
+        state.activeMark = event.target.value;
+        renderStatus();
+      });
+    });
+
+    window.addEventListener("pageshow", syncControlsFromState);
+    syncControlsFromState();
+    renderBoard();
+    renderUltimateState();
+    renderStatus();
+  </script>
+</body>
+</html>

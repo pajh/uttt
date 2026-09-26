@@ -1,0 +1,27 @@
+make: 'bin/orig' is up to date.
+multi-rig identities
+  p0: ./bin/ai_negamax
+      HELLO: NM-003-R1-D0L0A0E1
+  p1: ./bin/orig
+      HELLO: ORIG001
+multi-rig 97s elapsed · 100/100 games
+p0 NM-003-R1-D0L0A0E1
+p1 ORIG001
+line 1:      210ms:33333C33333333C3333333333:      95ms
+line 2:      139ms:3333C333DCC3C33DCC33D3333:      89ms
+line 3:      283ms:33C333C3D333333333C33CC33:      95ms
+line 4:      162ms:33C3333C33333333333333333:      85ms
+
+multi-rig report
+run: 2026-09-25 10:00:49 IST
+p0: ./bin/ai_negamax
+p0 HELLO: NM-003-R1-D0L0A0E1
+p1: ./bin/orig
+p1 HELLO: ORIG001
+lines: 4  games per line: 25  base seed: 20261001  relaxed: 5000 ms
+
+p0 ./bin/ai_negamax: 71 wins (3inARow 56, CountVictory 15, Forfeit 0)  73.0%
+p1 ./bin/orig: 25 wins (3inARow 25, CountVictory 0, Forfeit 0)  27.0%
+draws: 4
+games: 100
+log: /home/paul/dev/codingame/ult-ttt/reports/multi-latest.log

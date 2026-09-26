@@ -15,12 +15,18 @@ without local C&C or assertions, with the evaluation timeout enabled
 
 The result table is printed to the console and written to reports/multi-latest.log
 (an existing file of that name is rotated to multi-latest.N.log first).
+
+Ctrl-C during the games stops new games only: every gamerig game runs in its own
+process session, so a terminal Ctrl-C never reaches the games in flight.  Those
+finish and keep their JSONL records, the result table is written as INTERRUPTED
+with the completed count and the raw directory, and the run exits 130.
 """
 import argparse
 import json
 import os
 import queue
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -174,6 +180,24 @@ def archive_work():
     return latest
 
 
+def on_interrupt(stop, interrupt):
+    """Builds the SIGINT handler for a game batch.
+
+    The first signal sets `interrupt` and `stop`: no line starts another game, and
+    the driver keeps collecting events until every line is done, so each game in
+    flight keeps its record.  Later signals are absorbed, so the report is still
+    written; the handler stays installed through that and the process then exits.
+    The notice goes to stderr, which leaves the live display on stdout intact.
+    """
+    def handler(signum, frame):
+        if interrupt.is_set():
+            return
+        interrupt.set()
+        stop.set()
+        print("interrupt: no new games; in-flight games finish first", file=sys.stderr)
+    return handler
+
+
 def run_line(line_no, args, run_dir, events, stop):
     line_seed = args.seed + (line_no - 1) * SEED_STRIDE
     start = 0 if line_no % 2 == 1 else 1
@@ -190,7 +214,10 @@ def run_line(line_no, args, run_dir, events, stop):
                 p1_bin, p1_args = prepare_command(args.p1, game_seed)
                 command = [str(GAMERIG), p0_bin, p0_args, p1_bin, p1_args, str(start),
                            "--relaxed", str(args.relaxed)]
-                proc = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+                # Own process session: a terminal Ctrl-C reaches this driver only,
+                # never the game in flight, which must run to completion.
+                proc = subprocess.run(command, cwd=ROOT, capture_output=True, text=True,
+                                      start_new_session=True)
                 errlog.write(f"--- game {game} seed {game_seed} start {start} rc {proc.returncode}\n")
                 errlog.write(proc.stderr)
                 errlog.flush()
@@ -349,11 +376,18 @@ def main(argv):
 
     events = queue.Queue()
     stop = threading.Event()
+    interrupt = threading.Event()
     state = {line_no: {"symbols": [], "wins": 0, "draws": 0, "played": 0,
                        "p0_ms": 0, "p1_ms": 0, "done": False}
              for line_no in range(1, args.lines + 1)}
     interactive = sys.stdout.isatty() and not args.no_interactive
     started = time.time()
+
+    # Installed before the lines start, so a Ctrl-C anywhere in the batch, display
+    # updates included, is handled here instead of raising KeyboardInterrupt.  An
+    # earlier Ctrl-C, during the build or the --HELLO probes, keeps the default
+    # behaviour and exits 130.
+    signal.signal(signal.SIGINT, on_interrupt(stop, interrupt))
 
     threads = []
     for line_no in range(1, args.lines + 1):
@@ -369,6 +403,10 @@ def main(argv):
     if interactive:
         draw_display(state, args, started, first_draw, p0_hello, p1_hello)
         first_draw = False
+    # One loop serves the whole run, whether it ends normally, on a line error or
+    # on Ctrl-C.  A shutdown only sets `stop`, so no line starts another game, and
+    # the loop still runs until every line has reported `done`: that keeps the
+    # record and the events of each game in flight.
     while finished < args.lines:
         try:
             event = events.get(timeout=0.5)
@@ -400,34 +438,29 @@ def main(argv):
         if interactive:
             draw_display(state, args, started, first_draw, p0_hello, p1_hello)
             first_draw = False
-        if error:
-            # Drain remaining workers so their threads exit cleanly.
-            while finished < args.lines:
-                try:
-                    event = events.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-                if event[0] == "done":
-                    state[event[1]]["done"] = True
-                    finished += 1
-            break
 
     if interactive:
         draw_display(state, args, started, first_draw, p0_hello, p1_hello)
         sys.stdout.write("\n")
         sys.stdout.flush()
 
+    total = args.lines * args.games_per_line
     table = result_table(records, args, p0_hello, p1_hello)
     if error:
         table += (f"\nABORTED: line {error[1]} game {error[2]} seed {error[3]} "
                   f"failed ({error[4]}); raw files: {run_dir}\n")
+    if interrupt.is_set():
+        table += (f"\nINTERRUPTED: {len(records)}/{total} games completed; "
+                  f"raw files: {run_dir}\n")
     print(table, end="")
     rotate_log()
     LOG_PATH.write_text(table)
     print(f"log: {LOG_PATH}")
     if error:
         return 1
-    if len(records) < args.lines * args.games_per_line:
+    if interrupt.is_set():
+        return 130
+    if len(records) < total:
         print("Some games are missing; inspect the run directory.", file=sys.stderr)
         return 1
     return 0
